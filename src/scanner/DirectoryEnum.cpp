@@ -55,4 +55,15 @@ ListStatus ListDirectory(const std::wstring& dir, uint32_t cluster, std::vector<
     return le == ERROR_NO_MORE_FILES ? ListStatus::Ok : ListStatus::Unavailable;
 }
 
+void RemoveIgnoredDirs(const std::wstring& dir, const std::vector<std::wstring>& ignored, std::vector<DirEntry>& list) {
+    if (ignored.empty()) return;
+    std::erase_if(list, [&](const DirEntry& e) {
+        if (!e.IsDir()) return false;
+        std::wstring cp = path::Join(dir, e.name);
+        for (const auto& ig : ignored)
+            if (path::EqualsNoCase(cp, ig)) return true;
+        return false;
+    });
+}
+
 }  // namespace ss

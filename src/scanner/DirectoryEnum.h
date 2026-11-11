@@ -27,4 +27,7 @@ uint64_t AllocatedSizeOf(uint32_t attrs, uint64_t size, uint32_t cluster, const 
 // One-level listing of a directory (canonical path). Thread-safe; touches nothing but the disk.
 ListStatus ListDirectory(const std::wstring& canonicalDir, uint32_t cluster, std::vector<DirEntry>& out);
 
+// Drops the sub-folders of `dir` that are on the user's ignore list (canonical paths), exactly like a full scan skips them.
+void RemoveIgnoredDirs(const std::wstring& dir, const std::vector<std::wstring>& ignoredCanonical, std::vector<DirEntry>& list);
+
 }  // namespace ss

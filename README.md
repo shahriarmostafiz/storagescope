@@ -63,12 +63,12 @@ Visual Studio: *File > Open > CMake...* and pick `CMakeLists.txt`, or open the g
 
 | Page | Purpose |
 |---|---|
-| Dashboard | Mounted drives as cards (used / free / total, SSD/HDD, type, and how free space changed vs. about a week ago). Scan Selected Drive, Scan Folder, Scan All Local Drives (manual scanning always works; see "Remembered scan and automatic updates"). A **Recycle Bin** row shows its size with an "Empty Recycle Bin" button (confirmed first). After a scan: **usage by file type** (stacked bar + legend), the **10 biggest folders** (by the files directly inside them) and the **10 biggest files**; double-click one to jump to it. At launch these come from the saved scan immediately, and they are recomputed after every change (a deleted or auto-detected change removes/updates the entries at once). |
+| Dashboard | Mounted drives as cards (used / free / total, SSD/HDD, type, and how free space changed vs. about a week ago). Scan Selected Drive, Scan Folder, Scan All Local Drives (manual scanning always works; see "Remembered scan and automatic updates"). A **Recycle Bin** row shows its size (emptying it is done on the Recycle Bin page). After a scan: **usage by file type** (stacked bar + legend), the **10 biggest folders** (by the files directly inside them) and the **10 biggest files**; double-click one to jump to it. At launch these come from the saved scan immediately, and they are recomputed after every change (a deleted or auto-detected change removes/updates the entries at once). |
 | Storage Analyzer | Browse the scan like a file manager: size, size on disk, % of parent bar, file/folder counts, modified, status. Sort any column, breadcrumb, search, context menu, multi-select, delete. |
 | Treemap | Squarified treemap of the current folder (box area = size; files coloured by type). Click selects, double-click enters a folder, right-click for Open in Analyzer / Open File Location / Add to Basket. |
 | Large Files | Thresholds 100 MB / 500 MB / 1 GB / 5 GB / custom, type filter (videos, pictures, audio, archives, disk images, installers, documents, other), a **last-modified** filter (older than 6 months / 1 year / 2 years), sorting, Refresh. Extension never implies "safe to delete". |
 | Temporary Files | Scans user temp locations, age filter (24 h / 7 d / 30 d / all eligible), checkbox categories, per-file failure handling. |
-| Recycle Bin | The Windows Recycle Bin of all drives, read through the shell: name, original location, size, date deleted. Tick items (or highlight them), then **Restore Selected** (Windows asks about name conflicts), **Delete Permanently...** (confirmed; cannot be undone) or **Empty Recycle Bin**. Select All / Clear Selection, Ctrl+A, Esc, Delete and F5 work too. |
+| Recycle Bin | The Windows Recycle Bin of all drives, read through the shell: name, original location, size, date deleted. Tick items (or highlight them), then **Restore Selected** (Windows asks about name conflicts), **Delete Permanently...** (confirmed; cannot be undone) or **Empty Recycle Bin** (all three run in the background, so the window stays responsive). Select All / Clear Selection, Ctrl+A, Esc, Delete and F5 work too. |
 | Settings | Theme, show hidden files, delete confirmations, default temp age, worker count, Open Logs, and an **ignore list** of folders/drives (several can be added at once). Scans skip ignored folders completely, so nothing inside them is counted or shown; adding one hides it from the current results immediately, removing one brings it back after the next scan. An ignored drive is skipped by "Scan All Local Drives" and refused when scanned directly. |
 
 **Selecting several items.** Storage Analyzer, Large Files and the Recycle Bin have a **check box in front of each row**: click the boxes to pick any rows, no Ctrl needed. Ticked rows are what Delete, Recycle, Add to Basket and the other actions use; with nothing ticked they use the highlighted rows (click, Shift+click and Ctrl+click still work). Ctrl+A ticks every row, Esc clears the ticks, Space ticks or unticks the highlighted rows. In the two big (virtual) lists the box is painted by the app, in the accent colour.
@@ -77,7 +77,7 @@ Visual Studio: *File > Open > CMake...* and pick `CMakeLists.txt`, or open the g
 
 **Small comforts.** Success messages appear as a short banner; the window size, position and last page are remembered; dropping a folder or drive onto the window scans it. Free space per drive per day is stored in `%LOCALAPPDATA%\StorageScope\history.csv` (a few numbers, no file names, capped at 1000 lines) for the "vs. a week ago" line; switch it off or clear it under Settings > Privacy.
 
-**Refreshing.** After a delete the list is updated from what is really on disk (items that report an error but are gone are removed; a half-deleted folder is rescanned). Storage Analyzer and Large Files have a **Refresh** button (also F5): Analyzer rescans the folder you are viewing, Large Files drops vanished files at once and rescans the last scan. Temporary Files rescans itself after cleaning and then shows a confirmation with what was freed, what was skipped and what remains.
+**Refreshing.** After a delete the list is updated from what is really on disk (items that report an error but are gone are removed; a half-deleted folder is rescanned). Storage Analyzer and Large Files have a **Refresh** button (also F5): Neither does a full rescan: Analyzer re-lists the folder you are viewing (new, removed and changed entries), Large Files checks the listed files and re-lists their folders. Use the Dashboard to scan again from scratch. Temporary Files rescans itself after cleaning and then shows a confirmation with what was freed, what was skipped and what remains.
 
 Search, sorting, navigation and Large Files all run on the in-memory index; they never touch the disk.
 
@@ -148,7 +148,7 @@ the test executable.
 ### System files
 
 Files with the Windows System attribute (`pagefile.sys`, `hiberfil.sys`, ...) are never shown in any list, chart or
-statistic, and there is no setting to show them (a `showSystem` value in an old settings file is ignored). They still count
+statistic, and there is no setting to show them (the old `showSystem` settings value no longer exists). They still count
 towards the drive's used space on the Dashboard, which comes from Windows. System *locations* (`C:\Windows` etc.) are
 protected from deletion as described below.
 
@@ -204,7 +204,7 @@ persisted in `lastscan.bin` (file and folder names; see "Remembered scan and aut
 
 ## Verification (Windows 11 x64, MSVC 14.29, Release, this machine)
 
-Automated (`StorageScopeTests.exe`, 272 checks, all passing, including the Recycle Bin listing and purge, the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan, the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
+Automated (`StorageScopeTests.exe`, 277 checks, all passing, including the Recycle Bin listing and purge, the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan (an ignored folder stays out of re-listings; a re-listed parent does not hide unread changes in a sub-folder), the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
 case, trailing slashes, `%SystemRoot%`, 8.3 names, ADS, `\\?\`, long and Unicode paths, junction to `System32`;
 scanner totals on a tree with Unicode folders, a >300-char path and a junction (target not counted); inaccessible and
 missing roots; cancellation (1 ms before start, ~400 ms mid-scan) with worker threads gone afterwards; permanent delete

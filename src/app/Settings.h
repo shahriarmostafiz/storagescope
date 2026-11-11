@@ -9,7 +9,6 @@ namespace ss {
 // System path protection is not a setting: it cannot be disabled.
 struct Settings {
     bool showHidden = true;
-    bool showSystem = false;  // always false: system files (pagefile.sys, hiberfil.sys, ...) are never shown; not user-changeable
     bool askBeforeRecycle = true;
     bool requireSecondPermanentConfirm = true;
     uint32_t tempAgeHours = 24;  // 24 / 168 / 720

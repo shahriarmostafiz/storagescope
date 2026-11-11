@@ -39,7 +39,7 @@ bool NeedsStructuralChange(const ScanNode* dir, const std::vector<DirEntry>& lis
     return false;
 }
 
-SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, ListStatus status) {
+SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, ListStatus status, uint64_t ownModified) {
     SyncStats s;
     if (!dir->dir) dir->dir = std::make_unique<DirData>();
     if (status != ListStatus::Ok) {
@@ -47,6 +47,7 @@ SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, List
         return s;
     }
     dir->status = NodeStatus::Ok;
+    if (ownModified) dir->modified = ownModified;  // this folder's contents are now known to match that time
 
     std::unordered_map<std::wstring, const DirEntry*> byName;
     byName.reserve(listing.size());
@@ -76,7 +77,8 @@ SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, List
             c.allocated = e.allocated;
             ++s.updated;
         }
-        c.modified = e.modified;
+        // A sub-folder's time is only taken when that folder itself is listed; copying it here would hide unread changes inside it.
+        if (c.type != NodeType::Directory) c.modified = e.modified;
         c.attrs = e.attrs;
     }
 
@@ -96,8 +98,8 @@ SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, List
         ScanNode n;
         n.name = e->name;
         n.attrs = e->attrs;
-        n.modified = e->modified;
         n.type = KindOf(*e);
+        n.modified = n.type == NodeType::Directory ? 0 : e->modified;  // 0 = unknown: a new folder is empty until its own listing arrives
         if (n.type == NodeType::File) {
             n.size = e->size;
             n.allocated = e->allocated;

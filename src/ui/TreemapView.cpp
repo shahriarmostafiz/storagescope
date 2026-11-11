@@ -122,7 +122,7 @@ void TreemapView::Rebuild() {
         for (auto& c : cur_->dir->children) {
             if (c.removed || c.size == 0 || (c.type != NodeType::File && c.type != NodeType::Directory)) continue;
             if (!s.showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
-            if (!s.showSystem && (c.attrs & FILE_ATTRIBUTE_SYSTEM)) continue;
+            if (c.attrs & FILE_ATTRIBUTE_SYSTEM) continue;  // system files are never shown
             all.push_back({{}, &c, c.size, 0});
         }
         std::sort(all.begin(), all.end(), [](const Tile& a, const Tile& b) { return a.size > b.size; });

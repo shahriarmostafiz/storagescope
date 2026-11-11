@@ -102,7 +102,6 @@ void Settings::Load() {
         if (x >= lo && x <= hi) v = static_cast<uint32_t>(x);
     };
     b("showHidden", showHidden);
-    // showSystem is deliberately never read: system files are always hidden (an old settings file cannot turn them on)
     b("askBeforeRecycle", askBeforeRecycle);
     b("requireSecondPermanentConfirm", requireSecondPermanentConfirm);
     b("keepHistory", keepHistory);
@@ -145,9 +144,9 @@ void Settings::Load() {
 void Settings::Save() const {
     char buf[512];
     sprintf_s(buf,
-              "{\n  \"showHidden\": %s,\n  \"showSystem\": %s,\n  \"askBeforeRecycle\": %s,\n"
+              "{\n  \"showHidden\": %s,\n  \"askBeforeRecycle\": %s,\n"
               "  \"requireSecondPermanentConfirm\": %s,\n  \"tempAgeHours\": %u,\n  \"workers\": %u,\n  \"theme\": %u,\n",
-              showHidden ? "true" : "false", showSystem ? "true" : "false", askBeforeRecycle ? "true" : "false",
+              showHidden ? "true" : "false", askBeforeRecycle ? "true" : "false",
               requireSecondPermanentConfirm ? "true" : "false", tempAgeHours, workers, theme);
     std::wstring joined;
     for (const auto& p : ignored) joined += (joined.empty() ? L"" : L"|") + p;

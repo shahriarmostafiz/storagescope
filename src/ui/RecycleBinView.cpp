@@ -4,6 +4,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <uxtheme.h>
 
 #include "ui/MainWindow.h"
@@ -102,12 +103,60 @@ std::vector<size_t> RecycleBinView::Chosen() const {
 
 void RecycleBinView::UpdateButtons() {
     if (filling_) return;
-    bool has = !bin_.items().empty(), chosen = !Chosen().empty();
-    EnableWindow(bAll_, has);
-    EnableWindow(bNone_, has);
-    EnableWindow(bRestore_, chosen);
-    EnableWindow(bDelete_, chosen);
-    EnableWindow(bEmpty_, has);
+    bool has = !bin_.items().empty(), chosen = !Chosen().empty(), idle = !working_;
+    EnableWindow(bRefresh_, idle);
+    EnableWindow(bAll_, has && idle);
+    EnableWindow(bNone_, has && idle);
+    EnableWindow(bRestore_, chosen && idle);
+    EnableWindow(bDelete_, chosen && idle);
+    EnableWindow(bEmpty_, has && idle);
+}
+
+// Items are matched again by name + original folder + deletion time on the worker, which has its own COM apartment and its own
+// copy of the bin (shell items must not be shared between threads).
+void RecycleBinView::RunJob(Job job, const std::vector<size_t>& idx) {
+    if (working_) return;
+    auto key = [](const std::wstring& from, const std::wstring& name, uint64_t when) { return from + L"|" + name + L"|" + std::to_wstring(when); };
+    std::unordered_set<std::wstring> keys;
+    for (size_t i : idx)
+        if (i < bin_.items().size()) keys.insert(key(bin_.items()[i].from, bin_.items()[i].name, bin_.items()[i].deleted));
+    working_ = true;
+    SetWindowTextW(info_, job == Job::Restore ? L"Restoring..." : job == Job::Purge ? L"Deleting..." : L"Emptying the Recycle Bin...");
+    UpdateButtons();
+    HWND owner = mw_->hwnd(), self = hwnd_;
+    worker_ = std::jthread([this, job, keys = std::move(keys), key, owner, self](std::stop_token) {
+        bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+        size_t n = 0;
+        bool ok = true;
+        if (job == Job::Empty) {
+            ok = SUCCEEDED(SHEmptyRecycleBinW(owner, nullptr, SHERB_NOCONFIRMATION));
+        } else {
+            RecycleBin bin;
+            bin.Reload();
+            std::vector<size_t> pick;
+            for (size_t i = 0; i < bin.items().size(); ++i)
+                if (keys.count(key(bin.items()[i].from, bin.items()[i].name, bin.items()[i].deleted))) pick.push_back(i);
+            n = job == Job::Purge ? bin.Purge(pick) : bin.Restore(pick, owner);
+        }
+        if (com) CoUninitialize();
+        doneJob_ = job;
+        doneCount_ = n;
+        doneOk_ = ok;
+        PostMessageW(self, WM_APP_BIN_DONE, 0, 0);
+    });
+}
+
+void RecycleBinView::OnJobDone() {
+    if (worker_.joinable()) worker_.join();
+    working_ = false;
+    Refresh();
+    size_t n = doneCount_;
+    if (doneJob_ == Job::Restore) mw_->Toast(n ? L"Restored " + FormatCount(n) + (n == 1 ? L" item" : L" items") : L"Nothing was restored");
+    else if (doneJob_ == Job::Purge)
+        mw_->Toast(n ? L"Deleted " + FormatCount(n) + (n == 1 ? L" item" : L" items") + L" permanently" : L"Nothing was deleted");
+    else if (doneOk_) mw_->Toast(L"Recycle Bin emptied");
+    else mw_->ShowMessage(L"The Recycle Bin could not be emptied.", L"Some items may be in use. Try again in a moment.", true);
+    mw_->DataChanged();  // drive space and (with automatic updates) the file lists change
 }
 
 void RecycleBinView::CheckAll(bool on) {
@@ -121,12 +170,7 @@ void RecycleBinView::CheckAll(bool on) {
 void RecycleBinView::Restore() {
     auto idx = Chosen();
     if (idx.empty()) return;
-    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    size_t n = bin_.Restore(idx, mw_->hwnd());
-    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-    Refresh();
-    mw_->Toast(n ? L"Restored " + FormatCount(n) + (n == 1 ? L" item" : L" items") : L"Nothing was restored");
-    mw_->DataChanged();  // drive space and (with automatic updates) the file lists change
+    RunJob(Job::Restore, idx);
 }
 
 void RecycleBinView::Purge() {
@@ -138,12 +182,7 @@ void RecycleBinView::Purge() {
     if (!mw_->Confirm(L"Permanently delete " + what + L" from the Recycle Bin?",
                       what + L"\n" + FormatBytes(bytes) + L"\n\nThis cannot be undone.", L"Delete Permanently\nThe items cannot be recovered", true))
         return;
-    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    size_t n = bin_.Purge(idx);
-    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-    Refresh();
-    mw_->Toast(n ? L"Deleted " + FormatCount(n) + (n == 1 ? L" item" : L" items") + L" permanently" : L"Nothing was deleted");
-    mw_->DataChanged();
+    RunJob(Job::Purge, idx);
 }
 
 void RecycleBinView::EmptyBin() {
@@ -154,15 +193,14 @@ void RecycleBinView::EmptyBin() {
                       FormatBytes(bytes) + L" in " + FormatCount(bin_.items().size()) + L" items will be deleted permanently from all drives. This cannot be undone.",
                       L"Empty Recycle Bin", true))
         return;
-    HRESULT hr = SHEmptyRecycleBinW(mw_->hwnd(), nullptr, SHERB_NOCONFIRMATION);
-    Refresh();
-    if (SUCCEEDED(hr)) mw_->Toast(L"Recycle Bin emptied");
-    else mw_->ShowMessage(L"The Recycle Bin could not be emptied.", L"Some items may be in use. Try again in a moment.", true);
-    mw_->DataChanged();
+    RunJob(Job::Empty, {});
 }
 
 LRESULT RecycleBinView::OnMessage(UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+        case WM_APP_BIN_DONE:
+            OnJobDone();
+            return 0;
         case WM_NOTIFY: {
             auto* nm = reinterpret_cast<NMHDR*>(l);
             if (nm->code == NM_CUSTOMDRAW && nm->hwndFrom == ListView_GetHeader(list_)) return HeaderCustomDraw(l);
@@ -173,7 +211,7 @@ LRESULT RecycleBinView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                     if (k->wVKey == 'A' && GetKeyState(VK_CONTROL) < 0) CheckAll(true);
                     else if (k->wVKey == VK_ESCAPE) CheckAll(false);
                     else if (k->wVKey == VK_DELETE) Purge();
-                    else if (k->wVKey == VK_F5) Refresh();
+                    else if (k->wVKey == VK_F5 && !working_) Refresh();
                 }
             }
             return 0;

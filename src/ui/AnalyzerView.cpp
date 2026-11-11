@@ -153,7 +153,7 @@ void AnalyzerView::DropReferences() {
 bool AnalyzerView::Visible(const ScanNode* n) const {
     const Settings& s = mw_->settings();
     if (!s.showHidden && (n->attrs & FILE_ATTRIBUTE_HIDDEN)) return false;
-    if (!s.showSystem && (n->attrs & FILE_ATTRIBUTE_SYSTEM)) return false;
+    if (n->attrs & FILE_ATTRIBUTE_SYSTEM) return false;  // system files are never shown
     return true;
 }
 
@@ -446,7 +446,7 @@ void AnalyzerView::Act(int id) {
     auto sel = Selected();
     if (id == ID_REFRESH) {
         if (cur_ && cur_->type == NodeType::Virtual) mw_->Rescan();  // "This PC": rescan everything that was scanned
-        else if (cur_) mw_->RefreshFolder(cur_);
+        else if (cur_) mw_->SyncFolder(cur_);  // re-list just this folder; no subtree rescan
         return;
     }
     if (sel.empty()) return;

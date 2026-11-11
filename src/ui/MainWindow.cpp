@@ -368,11 +368,10 @@ void MainWindow::OnSnapshotLoaded() {
 }
 
 void MainWindow::SaveScanNow() {
-    Logger::Get().Info(L"save on exit? remember=%d cleared=%d scan=%d dirty=%d scanning=%d", settings_.rememberScan, cleared_, scan_ != nullptr, treeDirty_, (bool)scanning_);
     if (!settings_.rememberScan || cleared_ || !scan_ || !treeDirty_ || scanning_) return;
     SetStatus(L"Saving the scan...");
     UpdateWindow(status_);
-    ScanStats st = ComputeStats(scan_->root.get(), settings_.showHidden, settings_.showSystem, 10);
+    ScanStats st = ComputeStats(scan_->root.get(), settings_.showHidden, false, 10);
     bool ok = SaveSnapshot(*scan_, lastRoots_, HashIgnored(settings_.ignored), st, SnapshotPath());
     Logger::Get().Info(L"scan saved on exit: ok=%d", ok);
     treeDirty_ = false;
@@ -438,7 +437,12 @@ void MainWindow::PumpSync() {
     syncQueue_.erase(syncQueue_.begin(), syncQueue_.begin() + static_cast<ptrdiff_t>(n));
     syncing_ = true;
     syncGen_ = gen_;
-    syncThread_ = std::jthread([this, jobs = syncJob_](std::stop_token) {
+    std::vector<std::wstring> ignored;  // the scanner skips these folders, so a re-listing must too
+    for (const auto& s : settings_.ignored) {
+        std::wstring c = path::Canonicalize(s);
+        if (!c.empty()) ignored.push_back(std::move(c));
+    }
+    syncThread_ = std::jthread([this, jobs = syncJob_, ignored = std::move(ignored)](std::stop_token) {
         std::vector<SyncResult> out;
         std::unordered_map<std::wstring, uint32_t> cluster;  // per drive
         for (const auto& p : jobs) {
@@ -447,7 +451,11 @@ void MainWindow::PumpSync() {
             if (it == cluster.end()) it = cluster.emplace(key, ClusterSizeOf(p)).first;
             SyncResult r;
             r.path = p;
+            WIN32_FILE_ATTRIBUTE_DATA fa;
+            if (GetFileAttributesExW(path::ToExtended(p).c_str(), GetFileExInfoStandard, &fa))
+                r.modified = (static_cast<uint64_t>(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
             r.st = ListDirectory(p, it->second, r.list);
+            RemoveIgnoredDirs(p, ignored, r.list);
             out.push_back(std::move(r));
         }
         {
@@ -489,7 +497,7 @@ void MainWindow::OnSyncDone() {
     for (const auto& r : out) {
         ScanNode* n = FindNodeByPath(root, r.path);  // looked up again: an earlier listing may have rebuilt this node's parent
         if (!n || n->type != NodeType::Directory) continue;
-        SyncStats s = ApplyListing(n, r.list, r.st);
+        SyncStats s = ApplyListing(n, r.list, r.st, r.modified);
         total.added += s.added;
         total.removed += s.removed;
         total.updated += s.updated;
@@ -842,9 +850,9 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
     Logger::Get().Info(L"scan start: roots=%zu", roots.size());
     unsigned fixedWorkers = settings_.workers;
     // A finished full scan is saved on the scan thread, before the tree is shared with the UI (no locking needed).
-    bool save = settings_.rememberScan && !refreshTarget_, hidden = settings_.showHidden, sys = settings_.showSystem;
+    bool save = settings_.rememberScan && !refreshTarget_, hidden = settings_.showHidden;
     uint64_t ignHash = HashIgnored(settings_.ignored);
-    scanThread_ = std::jthread([this, roots, fixedWorkers, ignored = settings_.ignored, save, hidden, sys, ignHash](std::stop_token st) {
+    scanThread_ = std::jthread([this, roots, fixedWorkers, ignored = settings_.ignored, save, hidden, ignHash](std::stop_token st) {
         DirectoryScanner ds;
         ScanOptions opt;
         opt.workers = fixedWorkers ? fixedWorkers : DriveManager::AutoWorkers(roots);
@@ -857,9 +865,9 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
             }
             PostMessageW(hwnd_, WM_APP_SCAN_PROGRESS, 0, 0);
         };
-        cb.onFinished = [this, &roots, save, hidden, sys, ignHash](std::unique_ptr<ScanResult> r) {
+        cb.onFinished = [this, &roots, save, hidden, ignHash](std::unique_ptr<ScanResult> r) {
             if (save && r && !r->canceled && r->root) {
-                ScanStats s = ComputeStats(r->root.get(), hidden, sys, 10);
+                ScanStats s = ComputeStats(r->root.get(), hidden, false, 10);
                 SaveSnapshot(*r, roots, ignHash, s, SnapshotPath());
             }
             {
@@ -1153,6 +1161,41 @@ int MainWindow::PruneMissing(const std::vector<ScanNode*>& nodes) {
     int n = DetachMissing(nodes);
     if (n) DataChanged();
     return n;
+}
+
+void MainWindow::SyncFolder(ScanNode* dir) {
+    if (busy() || !scan_ || !dir) return;
+    SyncPaths({BuildPath(dir)});
+    Toast(L"Folder refreshed");
+}
+
+// Light "Refresh": the listed items are verified against the disk. Vanished ones are dropped, and each distinct parent
+// folder is listed once (shallow) so changed sizes and new files show up. No subtree rescan.
+void MainWindow::RefreshNodes(const std::vector<ScanNode*>& nodes) {
+    if (busy() || !scan_) return;
+    std::vector<std::wstring> parents;
+    bool capped = false;
+    {
+        std::unordered_set<std::wstring> seen;
+        for (const ScanNode* n : nodes) {
+            if (n->removed) continue;
+            std::wstring p = path::Parent(BuildPath(n));
+            if (!p.empty() && seen.insert(path::Canonicalize(p)).second) parents.push_back(std::move(p));
+            if (parents.size() >= 3000) {  // each is one directory listing
+                capped = true;
+                break;
+            }
+        }
+    }
+    // One disk call per row: fine for a few thousand rows, a visible freeze for hundreds of thousands. The folder re-listing
+    // below removes vanished files on a worker thread anyway, so big lists skip this quick pass.
+    int gone = nodes.size() <= 5000 ? PruneMissing(nodes) : 0;
+    size_t folders = parents.size();
+    SyncPaths(std::move(parents));  // vanished files, changed sizes and new files are applied when the listings arrive
+    std::wstring msg = L"Refreshing " + FormatCount(folders) + (folders == 1 ? L" folder..." : L" folders...");
+    if (gone) msg = FormatCount(static_cast<size_t>(gone)) + L" missing item(s) removed. " + msg;
+    if (capped) msg += L" (the rest is kept current by the live watcher)";
+    Toast(msg);
 }
 
 bool MainWindow::IsIgnoredPath(const std::wstring& p) const {

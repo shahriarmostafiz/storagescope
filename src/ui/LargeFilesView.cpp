@@ -176,7 +176,7 @@ void LargeFilesView::Rebuild() {
             if (!n->dir) continue;
             for (auto& c : n->dir->children) {
                 if (c.removed) continue;
-                if (!mw_->settings().showSystem && (c.attrs & FILE_ATTRIBUTE_SYSTEM)) continue;  // ignore system files
+                if (c.attrs & FILE_ATTRIBUTE_SYSTEM) continue;  // system files are never shown
                 if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
                 if (c.type == NodeType::Directory) stack.push_back(&c);
                 else if (c.type == NodeType::File && c.size >= minSize && c.modified <= staleCutoff &&
@@ -254,8 +254,7 @@ void LargeFilesView::UpdateButtons() {
 
 void LargeFilesView::Act(int id) {
     if (id == ID_REFRESH) {
-        if (rows_.size() <= 5000) mw_->PruneMissing(rows_);  // files deleted outside the app disappear at once (skipped on huge lists: one disk check per row)
-        mw_->Rescan();                                        // the rescan then finds the rest and any new files
+        mw_->RefreshNodes(rows_);  // verify the listed files and re-list their folders; no full rescan (use the Dashboard for that)
         return;
     }
     auto sel = Selected();

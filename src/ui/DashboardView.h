@@ -33,7 +33,6 @@ private:
     void ScanSelected();
     void ScanFolder();
     void ScanAll();
-    void EmptyBin();
     void OpenTop(HWND list);
 
     std::vector<DriveInfo> drives_;
@@ -41,7 +40,7 @@ private:
     std::vector<RECT> cards_;
     int sel_ = -1;
     HWND bScan_ = nullptr, bFolder_ = nullptr, bAll_ = nullptr, bRefresh_ = nullptr, note_ = nullptr, binText_ = nullptr,
-         bBin_ = nullptr, listFolders_ = nullptr, listFiles_ = nullptr;
+         listFolders_ = nullptr, listFiles_ = nullptr;
     uint64_t binBytes_ = 0, binItems_ = 0;
 
     bool dirty_ = true;      // stats need recomputing when the page is next shown

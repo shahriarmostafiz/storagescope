@@ -20,7 +20,9 @@ struct SyncStats {
 
 // Makes `dir` match what is on disk one level deep (files added/removed/resized, folders added/removed) and corrects the totals of
 // every ancestor. Idempotent. A non-Ok `status` only records the status (a listing that failed cannot be trusted).
-SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, ListStatus status);
+// `ownModified` (optional) is the folder's own last-write time read BEFORE it was listed; it is stored so the next start-up check
+// compares against what was really read.
+SyncStats ApplyListing(ScanNode* dir, const std::vector<DirEntry>& listing, ListStatus status, uint64_t ownModified = 0);
 
 // Quick "which folders changed?" check. NTFS updates a folder's modified time when an entry is added/removed/renamed in it, so
 // comparing stored times with the disk finds changed folders without re-reading their contents.

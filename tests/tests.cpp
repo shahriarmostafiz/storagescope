@@ -369,13 +369,12 @@ static void TestIgnoreAndSettings(const std::wstring& base) {
     Settings s;
     s.theme = 2;
     s.workers = 4;
-    s.showSystem = true;
     s.ignored = {L"D:\\", root + L"\\a,b", root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e"};
     s.Save();
     Settings t;
     t.Load();
     SetEnvironmentVariableW(L"LOCALAPPDATA", oldVal);
-    CHECK(t.theme == 2 && t.workers == 4 && !t.showSystem);  // showSystem=true in a settings file is ignored: system files are never shown
+    CHECK(t.theme == 2 && t.workers == 4 );
     CHECK(t.ignored.size() == 3 && t.ignored[0] == L"D:\\" && t.ignored[1] == root + L"\\a,b" &&
           t.ignored[2] == root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e");
 }
@@ -684,6 +683,56 @@ static void TestTreeSync(const std::wstring& base) {
     CHECK(a == b);
     ScanNode* nd = FindNodeByPath(r, root + L"\\newdir\\inner");
     CHECK(nd && nd->size == 5555 && nd->parent->parent == r);  // parent links survived the rebuild
+
+    // Fix: an ignored folder must stay out of the tree when its parent is re-listed (the scanner skips it the same way).
+    std::wstring ig = base + L"\\syncign";
+    MkDirs(ig + L"\\skipme\\deep");
+    MkFile(ig + L"\\skipme\\deep\\x.bin", 777);
+    MkFile(ig + L"\\a.bin", 10);
+    std::unique_ptr<ScanResult> igScan;
+    {
+        DirectoryScanner ds;
+        ScanOptions o{4};
+        o.ignored = {ig + L"\\skipme"};
+        ScanCallbacks cb;
+        cb.onFinished = [&](std::unique_ptr<ScanResult> r) { igScan = std::move(r); };
+        ds.Scan({ig}, o, cb, {});
+    }
+    CHECK(igScan->root->size == 10);
+    MkFile(ig + L"\\b.bin", 20);  // a change next to the ignored folder
+    std::vector<DirEntry> igList;
+    ListDirectory(ig, ClusterSizeOf(ig), igList);
+    RemoveIgnoredDirs(ig, {path::Canonicalize(ig + L"\\skipme")}, igList);
+    ApplyListing(igScan->root.get(), igList, ListStatus::Ok);
+    CHECK(igScan->root->size == 30 && FindNodeByPath(igScan->root.get(), ig + L"\\skipme") == nullptr);
+
+    // Fix: re-listing a parent must not copy a sub-folder's time (its contents were not read); a new folder starts "unknown".
+    ScanNode* subNode = FindNodeByPath(r, root + L"\\sub");
+    uint64_t subTime = subNode->modified;
+    SetAge(root + L"\\sub", 1);
+    MkFile(root + L"\\sub\\again.bin", 5);  // sub's disk time changes
+    std::vector<DirEntry> rootList;
+    ListDirectory(root, ClusterSizeOf(root), rootList);
+    ApplyListing(r, rootList, ListStatus::Ok);
+    CHECK(subNode->modified == subTime);
+    std::vector<DirCheck> after;
+    CollectDirChecks(r, after);
+    bool flagged = false;
+    for (auto& p : ValidateDirs(after, 2, {})) flagged = flagged || path::EqualsNoCase(p, root + L"\\sub");
+    CHECK(flagged);  // so the next start-up check still re-reads it
+    // ...and once the folder itself is listed with its own time, it is no longer flagged
+    {
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        GetFileAttributesExW(Ext(root + L"\\sub").c_str(), GetFileExInfoStandard, &fa);
+        std::vector<DirEntry> subList;
+        ListDirectory(root + L"\\sub", ClusterSizeOf(root), subList);
+        ApplyListing(subNode, subList, ListStatus::Ok, (static_cast<uint64_t>(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime);
+        std::vector<DirCheck> again;
+        CollectDirChecks(r, again);
+        bool still = false;
+        for (auto& p : ValidateDirs(again, 2, {})) still = still || path::EqualsNoCase(p, root + L"\\sub");
+        CHECK(!still);
+    }
 
     // multi-root ("This PC") lookup
     std::wstring other = base + L"\\syncother";

@@ -34,7 +34,6 @@ void DashboardView::OnCreate() {
     bAll_ = Make(L"BUTTON", L"Scan All Local Drives", WS_TABSTOP | BS_OWNERDRAW, ID_ALL);
     bRefresh_ = Make(L"BUTTON", L"Refresh", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);
     binText_ = Make(L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX | SS_ENDELLIPSIS, ID_BINTEXT);
-    bBin_ = Make(L"BUTTON", L"Empty Recycle Bin", WS_TABSTOP | BS_OWNERDRAW, ID_BIN);
     note_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_NOTE);
     for (int i = 0; i < 2; ++i) {
         HWND l = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, i == 0 ? ID_LISTF : ID_LISTX);
@@ -80,8 +79,7 @@ void DashboardView::Layout(int w, int h) {
     }
     int y = (cards_.empty() ? top : cards_.back().bottom) + gap;
 
-    MoveWindow(binText_, m, y, std::max(mw_->S(200), w - 2 * m - mw_->S(210)), bh, TRUE);
-    MoveWindow(bBin_, w - m - mw_->S(190), y, mw_->S(190), bh, TRUE);
+    MoveWindow(binText_, m, y, std::max(mw_->S(200), w - 2 * m), bh, TRUE);
     y += mw_->S(46);
     MoveWindow(note_, m, y, std::max(10, w - 2 * m), mw_->S(26), TRUE);
     y += mw_->S(40);
@@ -166,7 +164,7 @@ void DashboardView::RefreshStats() {
     };
     if (sc) {
         const Settings& s = mw_->settings();
-        stats_ = ComputeStats(sc->root.get(), s.showHidden, s.showSystem, 10);  // one pass over the in-memory index
+        stats_ = ComputeStats(sc->root.get(), s.showHidden, false, 10);  // one pass over the in-memory index
         auto fill = [&](HWND list, const std::vector<TopItem>& items, std::vector<ScanNode*>& nodes) {
             for (size_t i = 0; i < items.size(); ++i) {
                 ScanNode* n = items[i].node;
@@ -233,7 +231,6 @@ void DashboardView::UpdateButtons() {
     EnableWindow(bScan_, idle && sel_ >= 0 && drives_[static_cast<size_t>(sel_)].ready);
     EnableWindow(bFolder_, idle);
     EnableWindow(bAll_, idle);
-    EnableWindow(bBin_, binItems_ > 0);
 }
 
 void DashboardView::ScanSelected() {
@@ -278,19 +275,6 @@ void DashboardView::ScanFolder() {
     }
     dlg->Release();
     if (!path.empty()) mw_->StartScan({path});
-}
-
-void DashboardView::EmptyBin() {
-    if (!binItems_) return;
-    if (!mw_->Confirm(L"Empty the Recycle Bin?",
-                      FormatBytes(binBytes_) + L" in " + FormatCount(binItems_) +
-                          L" items will be deleted permanently from all drives. This cannot be undone.",
-                      L"Empty Recycle Bin", true))
-        return;
-    HRESULT hr = SHEmptyRecycleBinW(mw_->hwnd(), nullptr, SHERB_NOCONFIRMATION);
-    Refresh();
-    if (SUCCEEDED(hr)) mw_->Toast(L"Recycle Bin emptied");
-    else mw_->ShowMessage(L"The Recycle Bin could not be emptied.", L"Some items may be in use. Try again in a moment.", true);
 }
 
 void DashboardView::OpenTop(HWND list) {
@@ -493,7 +477,6 @@ LRESULT DashboardView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                     dirty_ = true;
                     Refresh();
                     break;
-                case ID_BIN: EmptyBin(); break;
             }
             return 0;
     }

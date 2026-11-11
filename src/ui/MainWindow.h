@@ -84,6 +84,8 @@ public:
     void IgnoreListChanged();                             // persist + hide newly ignored folders from current results
     void Rescan();                                       // rescan whatever was last scanned
     int PruneMissing(const std::vector<ScanNode*>& nodes); // drop nodes whose file/folder no longer exists; returns how many
+    void SyncFolder(ScanNode* dir);                      // re-list one folder's direct contents (new/removed/changed entries)
+    void RefreshNodes(const std::vector<ScanNode*>& nodes); // re-check just these items: drop vanished ones, re-list their folders (no rescan)
     void DeleteItems(std::vector<ScanNode*> nodes, DeleteMode mode);
 
     // Native dialogs (TaskDialog)
@@ -166,6 +168,7 @@ private:
         std::wstring path;
         std::vector<DirEntry> list;
         ListStatus st = ListStatus::Ok;
+        uint64_t modified = 0;  // the folder's own time, read before listing
     };
     std::vector<SyncResult> syncOut_;                      // hand-over slot: listing thread -> UI
     std::vector<std::wstring> syncQueue_, syncJob_;        // UI thread only

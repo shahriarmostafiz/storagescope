@@ -18,6 +18,7 @@ enum : UINT {
     WM_APP_SNAPSHOT_LOADED,  // the saved scan finished loading on its worker thread
     WM_APP_VALIDATED,        // the start-up check of the loaded scan found its changed folders
     WM_APP_SYNC_DONE,        // folders were re-listed on a worker thread; apply them to the tree
+    WM_APP_BIN_DONE,         // a Recycle Bin restore / delete / empty finished on its worker thread
 };
 
 // All colours come from here so a dark theme can be added later by swapping this table.
