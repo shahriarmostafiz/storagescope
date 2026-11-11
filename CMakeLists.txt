@@ -30,6 +30,7 @@ add_library(storagescope_core STATIC
   src/app/History.cpp
   src/operations/FileOperationService.cpp
   src/operations/ExplorerService.cpp
+  src/operations/RecycleBin.cpp
   src/cleanup/TempCleanup.cpp
   src/utils/FormatUtils.cpp
   src/utils/Logger.cpp

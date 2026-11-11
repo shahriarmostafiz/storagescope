@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_set>
 #include <vector>
 
 #include "scanner/ScanNode.h"
@@ -29,6 +30,7 @@ private:
          note_ = nullptr, sortCb_ = nullptr, dirBtn_ = nullptr, bRefresh_ = nullptr, lblStale_ = nullptr, cbStale_ = nullptr, bBasket_ = nullptr;
     void SyncSortUi();
     std::vector<ScanNode*> rows_;
+    std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column
     int sortCol_ = 1;  // Size
     bool sortAsc_ = false;
 };

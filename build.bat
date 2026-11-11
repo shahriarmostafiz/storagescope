@@ -24,7 +24,7 @@ pushd "%ROOT%"
 set "FLAGS=/nologo /std:c++20 /EHsc /O2 /MT /W4 /utf-8 /MP /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_WIN32_WINNT=0x0A00 /DNDEBUG /Isrc"
 set "SYSLIBS=user32.lib gdi32.lib comctl32.lib shell32.lib ole32.lib uuid.lib advapi32.lib shlwapi.lib uxtheme.lib dwmapi.lib msimg32.lib oleacc.lib oleaut32.lib uiautomationcore.lib cabinet.lib"
 
-set "CORE=src\filesystem\PathUtils.cpp src\filesystem\DriveManager.cpp src\filesystem\ChangeWatcher.cpp src\safety\PathProtectionService.cpp src\scanner\ScanNode.cpp src\scanner\DirectoryScanner.cpp src\scanner\FileTypes.cpp src\scanner\ScanStats.cpp src\scanner\ScanSnapshot.cpp src\scanner\DirectoryEnum.cpp src\scanner\TreeSync.cpp src\app\History.cpp src\operations\FileOperationService.cpp src\operations\ExplorerService.cpp src\cleanup\TempCleanup.cpp src\utils\FormatUtils.cpp src\utils\Logger.cpp src\app\Settings.cpp"
+set "CORE=src\filesystem\PathUtils.cpp src\filesystem\DriveManager.cpp src\filesystem\ChangeWatcher.cpp src\safety\PathProtectionService.cpp src\scanner\ScanNode.cpp src\scanner\DirectoryScanner.cpp src\scanner\FileTypes.cpp src\scanner\ScanStats.cpp src\scanner\ScanSnapshot.cpp src\scanner\DirectoryEnum.cpp src\scanner\TreeSync.cpp src\app\History.cpp src\operations\FileOperationService.cpp src\operations\ExplorerService.cpp src\operations\RecycleBin.cpp src\cleanup\TempCleanup.cpp src\utils\FormatUtils.cpp src\utils\Logger.cpp src\app\Settings.cpp"
 
 cl %FLAGS% /c /Fo"%OUT%\core\\" %CORE% || goto :fail
 if exist "%OUT%\core.lib" del "%OUT%\core.lib"

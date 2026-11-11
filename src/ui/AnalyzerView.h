@@ -4,6 +4,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "scanner/ScanNode.h"
@@ -50,6 +51,7 @@ private:
     int crumbRight_ = 0;
     ScanNode* cur_ = nullptr;
     std::wstring keepPath_;
+    std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column (together with highlighted rows when none is ticked)
     bool searchMode_ = false, suppressSearch_ = false, truncated_ = false;
     std::vector<ScanNode*> rows_, searchRows_;
     int sortCol_ = C_SIZE;

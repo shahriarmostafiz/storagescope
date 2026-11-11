@@ -61,7 +61,8 @@ void LargeFilesView::OnCreate() {
     SyncSortUi();
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
-    ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+    ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_CHECKBOXES);
+    ListView_SetCallbackMask(list_, LVIS_STATEIMAGEMASK);  // the checkbox state of a virtual list comes from checked_
     struct D {
         const wchar_t* t;
         int w, fmt;
@@ -131,6 +132,7 @@ void LargeFilesView::SyncSortUi() {
 
 void LargeFilesView::DropReferences() {
     rows_.clear();
+    checked_.clear();
     ListView_SetItemCountEx(list_, 0, 0);
 }
 
@@ -228,6 +230,10 @@ std::wstring LargeFilesView::CellText(ScanNode* n, int col) const {
 
 std::vector<ScanNode*> LargeFilesView::Selected() const {
     std::vector<ScanNode*> out;
+    if (!checked_.empty())  // ticked rows win; otherwise the highlighted ones
+        for (ScanNode* n : rows_)
+            if (checked_.count(n) && !n->removed) out.push_back(n);
+    if (!out.empty()) return out;
     for (int i = ListView_GetNextItem(list_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(list_, i, LVNI_SELECTED))
         if (i < static_cast<int>(rows_.size())) out.push_back(rows_[static_cast<size_t>(i)]);
     return out;
@@ -272,10 +278,26 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             switch (nm->code) {
                 case LVN_GETDISPINFOW: {
                     auto* d = reinterpret_cast<NMLVDISPINFOW*>(l);
-                    if (d->item.iItem >= 0 && d->item.iItem < static_cast<int>(rows_.size()) && (d->item.mask & LVIF_TEXT))
-                        wcsncpy_s(d->item.pszText, static_cast<size_t>(d->item.cchTextMax),
-                                  CellText(rows_[static_cast<size_t>(d->item.iItem)], d->item.iSubItem).c_str(), _TRUNCATE);
+                    if (d->item.iItem >= 0 && d->item.iItem < static_cast<int>(rows_.size())) {
+                        const ScanNode* n = rows_[static_cast<size_t>(d->item.iItem)];
+                        if (d->item.mask & LVIF_TEXT)
+                            wcsncpy_s(d->item.pszText, static_cast<size_t>(d->item.cchTextMax),
+                                      CellText(rows_[static_cast<size_t>(d->item.iItem)], d->item.iSubItem).c_str(), _TRUNCATE);
+                        if ((d->item.mask & LVIF_STATE) && (d->item.stateMask & LVIS_STATEIMAGEMASK))  // no native check box image: DrawListTick paints it
+                            d->item.state &= ~static_cast<UINT>(LVIS_STATEIMAGEMASK);
+                        (void)n;
+                    }
                     break;
+                }
+                case NM_CUSTOMDRAW: {
+                    auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
+                    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                    if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return CDRF_NOTIFYPOSTPAINT;
+                    if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
+                        int i = static_cast<int>(cd->nmcd.dwItemSpec);
+                        if (i >= 0 && i < static_cast<int>(rows_.size())) DrawListTick(list_, cd->nmcd.hdc, i, checked_.count(rows_[static_cast<size_t>(i)]) != 0);
+                    }
+                    return CDRF_DODEFAULT;
                 }
                 case LVN_ODFINDITEMW: return -1;
                 case LVN_COLUMNCLICK: {
@@ -289,6 +311,19 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                     Rebuild();
                     break;
                 }
+                case NM_CLICK: {  // a virtual list does not report checkbox clicks: toggle the tick ourselves
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    ScreenToClient(list_, &pt);
+                    int hit = HitListTick(list_, pt);
+                    if (hit >= 0 && hit < static_cast<int>(rows_.size())) {
+                        const ScanNode* n = rows_[static_cast<size_t>(hit)];
+                        if (!checked_.erase(n)) checked_.insert(n);
+                        ListView_RedrawItems(list_, hit, hit);
+                        UpdateButtons();
+                    }
+                    break;
+                }
                 case LVN_ITEMCHANGED:
                 case LVN_ODSTATECHANGED: UpdateButtons(); break;
                 case NM_DBLCLK: Act(ID_OPEN); break;
@@ -297,6 +332,18 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                     if (k->wVKey == VK_F5) Act(ID_REFRESH);
                     else if (k->wVKey == VK_DELETE && IsWindowEnabled(bRecycle_)) Act(GetKeyState(VK_SHIFT) < 0 ? ID_PERM : ID_RECYCLE);
                     else if (k->wVKey == VK_RETURN) Act(ID_OPEN);
+                    else if (k->wVKey == VK_SPACE) {  // tick / untick the highlighted rows
+                        for (int i = ListView_GetNextItem(list_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(list_, i, LVNI_SELECTED))
+                            if (i < static_cast<int>(rows_.size()) && !checked_.erase(rows_[static_cast<size_t>(i)])) checked_.insert(rows_[static_cast<size_t>(i)]);
+                        InvalidateRect(list_, nullptr, FALSE);
+                        UpdateButtons();
+                    } else if ((k->wVKey == 'A' && GetKeyState(VK_CONTROL) < 0) || k->wVKey == VK_ESCAPE) {  // tick every row / clear all ticks
+                        checked_.clear();
+                        if (k->wVKey == 'A')
+                            for (ScanNode* n : rows_) checked_.insert(n);
+                        InvalidateRect(list_, nullptr, FALSE);
+                        UpdateButtons();
+                    }
                     break;
                 }
             }

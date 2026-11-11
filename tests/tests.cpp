@@ -23,6 +23,7 @@
 #include "filesystem/ChangeWatcher.h"
 #include "filesystem/PathUtils.h"
 #include "operations/FileOperationService.h"
+#include "operations/RecycleBin.h"
 #include "safety/PathProtectionService.h"
 #include "scanner/DirectoryScanner.h"
 #include "utils/FormatUtils.h"
@@ -812,6 +813,25 @@ static void TestDeletion(const std::wstring& base) {
     CHECK(rb.items[0].error == FileOperationError::None);
     CHECK(!Exists(rf));
     printf("  recycle error code (0 = ok): %d\n", static_cast<int>(rb.items[0].error));
+
+    // the Recycle Bin listing finds that file; purging it removes exactly that one (and cleans up after this test)
+    {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        RecycleBin bin;
+        bin.Reload();
+        std::vector<size_t> mine;  // only the file this run recycled (name + this run's private temp folder); nothing else is touched
+        for (size_t i = 0; i < bin.items().size(); ++i) {
+            const BinItem& b = bin.items()[i];
+            if (b.name == L"recycle_me.txt" && path::EqualsNoCase(path::Canonicalize(b.from), path::Canonicalize(base))) mine.push_back(i);
+        }
+        CHECK(mine.size() == 1);
+        if (mine.size() == 1) {
+            CHECK(bin.items()[mine[0]].size == 10 && !bin.items()[mine[0]].isDir && bin.items()[mine[0]].deleted != 0);
+            size_t total = bin.items().size();
+            CHECK(bin.Purge(mine) == 1);
+            CHECK(bin.items().size() == total - 1);
+        }
+    }
 
     // locked file => FileInUse, nothing crashes
     std::wstring lf = base + L"\\locked.txt";

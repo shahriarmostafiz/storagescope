@@ -68,7 +68,10 @@ Visual Studio: *File > Open > CMake...* and pick `CMakeLists.txt`, or open the g
 | Treemap | Squarified treemap of the current folder (box area = size; files coloured by type). Click selects, double-click enters a folder, right-click for Open in Analyzer / Open File Location / Add to Basket. |
 | Large Files | Thresholds 100 MB / 500 MB / 1 GB / 5 GB / custom, type filter (videos, pictures, audio, archives, disk images, installers, documents, other), a **last-modified** filter (older than 6 months / 1 year / 2 years), sorting, Refresh. Extension never implies "safe to delete". |
 | Temporary Files | Scans user temp locations, age filter (24 h / 7 d / 30 d / all eligible), checkbox categories, per-file failure handling. |
+| Recycle Bin | The Windows Recycle Bin of all drives, read through the shell: name, original location, size, date deleted. Tick items (or highlight them), then **Restore Selected** (Windows asks about name conflicts), **Delete Permanently...** (confirmed; cannot be undone) or **Empty Recycle Bin**. Select All / Clear Selection, Ctrl+A, Esc, Delete and F5 work too. |
 | Settings | Theme, show hidden files, delete confirmations, default temp age, worker count, Open Logs, and an **ignore list** of folders/drives (several can be added at once). Scans skip ignored folders completely, so nothing inside them is counted or shown; adding one hides it from the current results immediately, removing one brings it back after the next scan. An ignored drive is skipped by "Scan All Local Drives" and refused when scanned directly. |
+
+**Selecting several items.** Storage Analyzer, Large Files and the Recycle Bin have a **check box in front of each row**: click the boxes to pick any rows, no Ctrl needed. Ticked rows are what Delete, Recycle, Add to Basket and the other actions use; with nothing ticked they use the highlighted rows (click, Shift+click and Ctrl+click still work). Ctrl+A ticks every row, Esc clears the ticks, Space ticks or unticks the highlighted rows. In the two big (virtual) lists the box is painted by the app, in the accent colour.
 
 **Basket.** "Add to Basket" (Analyzer, Large Files, Treemap) collects items across pages; a row under the progress bar shows the count and total size, and "Delete Basket..." deletes them with the normal protection checks and confirmations. Protected items cannot enter the basket.
 
@@ -201,7 +204,7 @@ persisted in `lastscan.bin` (file and folder names; see "Remembered scan and aut
 
 ## Verification (Windows 11 x64, MSVC 14.29, Release, this machine)
 
-Automated (`StorageScopeTests.exe`, 268 checks, all passing, including the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan, the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
+Automated (`StorageScopeTests.exe`, 272 checks, all passing, including the Recycle Bin listing and purge, the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan, the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
 case, trailing slashes, `%SystemRoot%`, 8.3 names, ADS, `\\?\`, long and Unicode paths, junction to `System32`;
 scanner totals on a tree with Unicode folders, a >300-char path and a junction (target not counted); inaccessible and
 missing roots; cancellation (1 ms before start, ~400 ms mid-scan) with worker threads gone afterwards; permanent delete

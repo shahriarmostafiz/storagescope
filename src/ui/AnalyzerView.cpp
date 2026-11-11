@@ -69,7 +69,8 @@ void AnalyzerView::OnCreate() {
     dirBtn_ = Make(L"BUTTON", L"Descending", WS_TABSTOP | BS_OWNERDRAW, ID_DIR);
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
-    ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP);
+    ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP | LVS_EX_CHECKBOXES);
+    ListView_SetCallbackMask(list_, LVIS_STATEIMAGEMASK);  // the checkbox state of a virtual list comes from checked_
 
     SHFILEINFOW sfi{};
     HIMAGELIST il = reinterpret_cast<HIMAGELIST>(SHGetFileInfoW(L"folder", FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof sfi,
@@ -143,6 +144,7 @@ void AnalyzerView::DropReferences() {
     searchRows_.clear();
     if (cur_ && !cur_->removed) keepPath_ = BuildPath(cur_);  // Rebuild() returns to this folder in the updated tree
     cur_ = nullptr;
+    checked_.clear();
     ListView_SetItemCountEx(list_, 0, 0);
 }
 
@@ -158,6 +160,7 @@ bool AnalyzerView::Visible(const ScanNode* n) const {
 void AnalyzerView::NavigateTo(ScanNode* n) {
     if (!n) return;
     cur_ = n;
+    checked_.clear();
     searchMode_ = false;
     suppressSearch_ = true;
     SetWindowTextW(search_, L"");
@@ -387,6 +390,10 @@ void AnalyzerView::DrawPercent(NMLVCUSTOMDRAW* cd) {
 
 std::vector<ScanNode*> AnalyzerView::Selected() const {
     std::vector<ScanNode*> out;
+    if (!checked_.empty())  // ticked rows win; otherwise the highlighted ones (click, Shift/Ctrl+click) are used
+        for (ScanNode* n : rows_)
+            if (checked_.count(n) && !n->removed) out.push_back(n);
+    if (!out.empty()) return out;
     for (int i = ListView_GetNextItem(list_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(list_, i, LVNI_SELECTED))
         if (i < static_cast<int>(rows_.size())) out.push_back(rows_[static_cast<size_t>(i)]);
     return out;
@@ -574,6 +581,8 @@ LRESULT AnalyzerView::OnNotify(NMHDR* nm, LPARAM l) {
             ScanNode* n = rows_[static_cast<size_t>(d->item.iItem)];
             if (d->item.mask & LVIF_TEXT) wcsncpy_s(d->item.pszText, static_cast<size_t>(d->item.cchTextMax), CellText(n, d->item.iSubItem).c_str(), _TRUNCATE);
             if ((d->item.mask & LVIF_IMAGE) && d->item.iSubItem == 0) d->item.iImage = IconFor(n);
+            if ((d->item.mask & LVIF_STATE) && (d->item.stateMask & LVIS_STATEIMAGEMASK))  // no native check box image: DrawListTick paints it
+                d->item.state &= ~static_cast<UINT>(LVIS_STATEIMAGEMASK);
             break;
         }
         case LVN_ODFINDITEMW: return -1;
@@ -586,6 +595,19 @@ LRESULT AnalyzerView::OnNotify(NMHDR* nm, LPARAM l) {
             }
             Sort();
             InvalidateRect(list_, nullptr, FALSE);
+            break;
+        }
+        case NM_CLICK: {  // a virtual list does not report checkbox clicks: toggle the tick ourselves
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(list_, &pt);
+            int hit = HitListTick(list_, pt);
+            if (hit >= 0 && hit < static_cast<int>(rows_.size())) {
+                const ScanNode* n = rows_[static_cast<size_t>(hit)];
+                if (!checked_.erase(n)) checked_.insert(n);
+                ListView_RedrawItems(list_, hit, hit);
+                SetTimer(hwnd_, kSelTimer, 60, nullptr);
+            }
             break;
         }
         case LVN_ITEMCHANGED:
@@ -609,13 +631,30 @@ LRESULT AnalyzerView::OnNotify(NMHDR* nm, LPARAM l) {
             else if (k->wVKey == VK_BACK) GoUp();
             else if (k->wVKey == VK_DELETE && IsWindowEnabled(bDelete_)) Act(shift ? ID_PERM : ID_RECYCLE);
             else if (k->wVKey == 'C' && ctrl) Act(M_COPY);
+            else if (k->wVKey == VK_SPACE) {  // tick / untick the highlighted rows
+                for (int i = ListView_GetNextItem(list_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(list_, i, LVNI_SELECTED))
+                    if (i < static_cast<int>(rows_.size()) && !checked_.erase(rows_[static_cast<size_t>(i)])) checked_.insert(rows_[static_cast<size_t>(i)]);
+                InvalidateRect(list_, nullptr, FALSE);
+                SetTimer(hwnd_, kSelTimer, 60, nullptr);
+            } else if ((k->wVKey == 'A' && ctrl) || k->wVKey == VK_ESCAPE) {  // tick every row / clear all ticks
+                checked_.clear();
+                if (k->wVKey == 'A')
+                    for (ScanNode* n : rows_) checked_.insert(n);
+                InvalidateRect(list_, nullptr, FALSE);
+                SetTimer(hwnd_, kSelTimer, 60, nullptr);
+            }
             break;
         }
         case NM_CUSTOMDRAW: {
             auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
             switch (cd->nmcd.dwDrawStage) {
                 case CDDS_PREPAINT: return CDRF_NOTIFYITEMDRAW;
-                case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW;
+                case CDDS_ITEMPREPAINT: return CDRF_NOTIFYSUBITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+                case CDDS_ITEMPOSTPAINT: {
+                    int i = static_cast<int>(cd->nmcd.dwItemSpec);
+                    if (i >= 0 && i < static_cast<int>(rows_.size())) DrawListTick(list_, cd->nmcd.hdc, i, checked_.count(rows_[static_cast<size_t>(i)]) != 0);
+                    return CDRF_DODEFAULT;
+                }
                 case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
                     if (cd->iSubItem == C_PCT) {
                         DrawPercent(cd);

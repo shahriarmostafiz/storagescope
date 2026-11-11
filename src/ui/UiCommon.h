@@ -32,6 +32,10 @@ bool IsDarkTheme();
 HBRUSH BgBrush();
 // Flat owner-drawn button (WM_DRAWITEM). "Scan..." = accent, "Delete"/"Permanent" = red text.
 void DrawFlatButton(const DRAWITEMSTRUCT* d);
+// Paints the check box (ticked or empty) of row `item` of a virtual list view (call from CDDS_ITEMPOSTPAINT).
+void DrawListTick(HWND list, HDC dc, int item, bool on);
+// Row whose check box is under `ptClient` (list client coordinates), or -1.
+int HitListTick(HWND list, POINT ptClient);
 // NM_CUSTOMDRAW handler for list-view headers so column titles stay readable in dark mode (lParam = NMCUSTOMDRAW*).
 LRESULT HeaderCustomDraw(LPARAM nmcd);
 HBRUSH PanelBrush();

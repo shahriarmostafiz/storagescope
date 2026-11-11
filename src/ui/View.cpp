@@ -399,6 +399,40 @@ LRESULT HeaderCustomDraw(LPARAM l) {
     return CDRF_DODEFAULT;
 }
 
+// A virtual list view does not draw its own check boxes reliably, so the tick is painted over the (empty) box: accent square + check.
+int HitListTick(HWND list, POINT ptClient) {
+    LVHITTESTINFO ht{};
+    ht.pt = ptClient;
+    int i = ListView_HitTest(list, &ht);
+    RECT icon{};
+    if (i < 0 || !ListView_GetItemRect(list, i, &icon, LVIR_ICON)) return -1;
+    return ptClient.x < icon.left ? i : -1;  // the box sits left of the file icon
+}
+
+void DrawListTick(HWND list, HDC dc, int item, bool on) {
+    RECT icon{};
+    if (!ListView_GetItemRect(list, item, &icon, LVIR_ICON)) return;
+    int dpi = GetDeviceCaps(dc, LOGPIXELSX), sz = MulDiv(14, dpi, 96), gap = MulDiv(3, dpi, 96);
+    RECT b{icon.left - gap - sz, (icon.top + icon.bottom - sz) / 2, icon.left - gap, (icon.top + icon.bottom + sz) / 2};
+    const Theme& c = Colors();
+    HBRUSH br = CreateSolidBrush(on ? c.accent : c.panel);
+    FillRect(dc, &b, br);
+    DeleteObject(br);
+    if (!on) {  // empty box
+        HBRUSH fr = CreateSolidBrush(c.muted);
+        FrameRect(dc, &b, fr);
+        DeleteObject(fr);
+        return;
+    }
+    HPEN pen = CreatePen(PS_SOLID, std::max(2, sz / 7), c.dark ? RGB(0, 0, 0) : RGB(255, 255, 255));
+    HGDIOBJ old = SelectObject(dc, pen);
+    MoveToEx(dc, b.left + sz / 5, b.top + sz / 2, nullptr);
+    LineTo(dc, b.left + sz * 2 / 5, b.bottom - sz / 4);
+    LineTo(dc, b.right - sz / 5, b.top + sz / 4);
+    SelectObject(dc, old);
+    DeleteObject(pen);
+}
+
 void DrawFlatButton(const DRAWITEMSTRUCT* d) {
     wchar_t text[96] = L"";
     GetWindowTextW(d->hwndItem, text, 96);

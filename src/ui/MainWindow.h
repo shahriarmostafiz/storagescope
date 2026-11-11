@@ -139,7 +139,7 @@ private:
     Settings settings_;
     PathProtectionService prot_{PathProtectionService::ConfigFromEnvironment()};
 
-    std::unique_ptr<View> pages_[6];
+    std::unique_ptr<View> pages_[7];
     DashboardView* dash_ = nullptr;
     TreemapView* treemap_ = nullptr;
     HWND toast_ = nullptr, basketText_ = nullptr, bBasketDel_ = nullptr, bBasketClear_ = nullptr;
