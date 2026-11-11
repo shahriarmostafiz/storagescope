@@ -22,7 +22,7 @@ private:
     HWND hdrMem_ = nullptr, remember_ = nullptr, autoUpd_ = nullptr, memInfo_ = nullptr, bClearScan_ = nullptr;
     HWND hdrIgnore_ = nullptr, noteIgnore_ = nullptr, ignoreList_ = nullptr, bAdd_ = nullptr, bRemove_ = nullptr;
     HWND hdrTheme_ = nullptr, cbTheme_ = nullptr, hdrScan_ = nullptr, hdrTemp_ = nullptr, hdrDel_ = nullptr, hdrPerf_ = nullptr, skipReparse_ = nullptr, skipDenied_ = nullptr,
-         showHidden_ = nullptr, showSystem_ = nullptr, cbAge_ = nullptr, askRecycle_ = nullptr,
+         showHidden_ = nullptr, cbAge_ = nullptr, askRecycle_ = nullptr,
          second_ = nullptr, lblWorkers_ = nullptr, cbWorkers_ = nullptr, safety_ = nullptr, bLogs_ = nullptr;
     bool loading_ = false;
 };

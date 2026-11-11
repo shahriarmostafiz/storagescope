@@ -128,7 +128,8 @@ private:
     void FirstRunScan();
     void HideIgnoredInTree();                 // detach folders of the ignore list from the loaded tree
 
-    HWND hwnd_ = nullptr, nav_ = nullptr, status_ = nullptr, stats_ = nullptr, prog_ = nullptr, stop_ = nullptr;
+    HWND hwnd_ = nullptr, nav_ = nullptr, status_ = nullptr, stats_ = nullptr, prog_ = nullptr, stop_ = nullptr, details_ = nullptr;
+    bool showDetails_ = false;  // "More info" while scanning: show the folder being scanned
     UINT dpi_ = 96;
     HFONT font_ = nullptr, bold_ = nullptr, title_ = nullptr;
     int page_ = -1;

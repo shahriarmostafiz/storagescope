@@ -374,7 +374,7 @@ static void TestIgnoreAndSettings(const std::wstring& base) {
     Settings t;
     t.Load();
     SetEnvironmentVariableW(L"LOCALAPPDATA", oldVal);
-    CHECK(t.theme == 2 && t.workers == 4 && t.showSystem);
+    CHECK(t.theme == 2 && t.workers == 4 && !t.showSystem);  // showSystem=true in a settings file is ignored: system files are never shown
     CHECK(t.ignored.size() == 3 && t.ignored[0] == L"D:\\" && t.ignored[1] == root + L"\\a,b" &&
           t.ignored[2] == root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e");
 }

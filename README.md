@@ -68,7 +68,7 @@ Visual Studio: *File > Open > CMake...* and pick `CMakeLists.txt`, or open the g
 | Treemap | Squarified treemap of the current folder (box area = size; files coloured by type). Click selects, double-click enters a folder, right-click for Open in Analyzer / Open File Location / Add to Basket. |
 | Large Files | Thresholds 100 MB / 500 MB / 1 GB / 5 GB / custom, type filter (videos, pictures, audio, archives, disk images, installers, documents, other), a **last-modified** filter (older than 6 months / 1 year / 2 years), sorting, Refresh. Extension never implies "safe to delete". |
 | Temporary Files | Scans user temp locations, age filter (24 h / 7 d / 30 d / all eligible), checkbox categories, per-file failure handling. |
-| Settings | Theme, show hidden/system files, delete confirmations, default temp age, worker count, Open Logs, and an **ignore list** of folders/drives (several can be added at once). Scans skip ignored folders completely, so nothing inside them is counted or shown; adding one hides it from the current results immediately, removing one brings it back after the next scan. An ignored drive is skipped by "Scan All Local Drives" and refused when scanned directly. |
+| Settings | Theme, show hidden files, delete confirmations, default temp age, worker count, Open Logs, and an **ignore list** of folders/drives (several can be added at once). Scans skip ignored folders completely, so nothing inside them is counted or shown; adding one hides it from the current results immediately, removing one brings it back after the next scan. An ignored drive is skipped by "Scan All Local Drives" and refused when scanned directly. |
 
 **Basket.** "Add to Basket" (Analyzer, Large Files, Treemap) collects items across pages; a row under the progress bar shows the count and total size, and "Delete Basket..." deletes them with the normal protection checks and confirmations. Protected items cannot enter the basket.
 
@@ -141,6 +141,13 @@ the test executable.
   `GetCompressedFileSizeW`; cloud placeholders count as 0.
 * The UI is told about progress with a throttled `WM_APP_SCAN_PROGRESS` (about 10/s) and one
   `WM_APP_SCAN_COMPLETE`. Workers never touch controls.
+
+### System files
+
+Files with the Windows System attribute (`pagefile.sys`, `hiberfil.sys`, ...) are never shown in any list, chart or
+statistic, and there is no setting to show them (a `showSystem` value in an old settings file is ignored). They still count
+towards the drive's used space on the Dashboard, which comes from Windows. System *locations* (`C:\Windows` etc.) are
+protected from deletion as described below.
 
 ### Protection rules
 

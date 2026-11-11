@@ -102,7 +102,7 @@ void Settings::Load() {
         if (x >= lo && x <= hi) v = static_cast<uint32_t>(x);
     };
     b("showHidden", showHidden);
-    b("showSystem", showSystem);
+    // showSystem is deliberately never read: system files are always hidden (an old settings file cannot turn them on)
     b("askBeforeRecycle", askBeforeRecycle);
     b("requireSecondPermanentConfirm", requireSecondPermanentConfirm);
     b("keepHistory", keepHistory);

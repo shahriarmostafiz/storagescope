@@ -31,7 +31,6 @@ void SettingsView::OnCreate() {
     SendMessageW(skipReparse_, BM_SETCHECK, BST_CHECKED, 0);
     SendMessageW(skipDenied_, BM_SETCHECK, BST_CHECKED, 0);
     showHidden_ = Make(L"BUTTON", L"Show hidden files", WS_TABSTOP | BS_AUTOCHECKBOX, ID_HIDDEN);
-    showSystem_ = Make(L"BUTTON", L"Show system files (off = ignored)", WS_TABSTOP | BS_AUTOCHECKBOX, ID_SYSTEM);
 
     hdrTemp_ = Make(L"STATIC", L"Temporary file cleanup - default age", SS_LEFT, 0);
     cbAge_ = Make(L"SSCombo", L"Temporary file age", WS_TABSTOP, ID_R24);
@@ -89,7 +88,6 @@ void SettingsView::Layout(int w, int h) {
     row(skipReparse_);
     row(skipDenied_);
     row(showHidden_);
-    row(showSystem_);
     y += mw_->S(12);
     hdr(hdrTemp_);
     MoveWindow(cbAge_, x + mw_->S(12), y, mw_->S(260), mw_->S(200), TRUE);
@@ -203,7 +201,6 @@ void SettingsView::Load() {
     loading_ = true;
     const Settings& s = mw_->settings();
     SendMessageW(showHidden_, BM_SETCHECK, s.showHidden ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(showSystem_, BM_SETCHECK, s.showSystem ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(askRecycle_, BM_SETCHECK, s.askBeforeRecycle ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(second_, BM_SETCHECK, s.requireSecondPermanentConfirm ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(cbAge_, CB_SETCURSEL, s.tempAgeHours == 168 ? 1 : s.tempAgeHours == 720 ? 2 : 0, 0);
@@ -224,7 +221,6 @@ void SettingsView::Store() {
     if (loading_) return;
     Settings& s = mw_->settings();
     s.showHidden = SendMessageW(showHidden_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    s.showSystem = SendMessageW(showSystem_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.askBeforeRecycle = SendMessageW(askRecycle_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.requireSecondPermanentConfirm = SendMessageW(second_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     int ai = static_cast<int>(SendMessageW(cbAge_, CB_GETCURSEL, 0, 0));

@@ -27,7 +27,7 @@ namespace ss {
 namespace {
 
 constexpr int kStopId = 1;
-constexpr int kBasketDelId = 2, kBasketClearId = 3;
+constexpr int kBasketDelId = 2, kBasketClearId = 3, kDetailsId = 4;
 const wchar_t* kNavItems[] = {L"Dashboard", L"Storage Analyzer", L"Treemap", L"Large Files", L"Temporary Files", L"Settings"};
 constexpr int kNavCount = 6;
 
@@ -207,6 +207,8 @@ bool MainWindow::OnCreate() {
                             nullptr, nullptr);
     stop_ = CreateWindowExW(0, L"BUTTON", L"Stop Scan", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_DISABLED | BS_OWNERDRAW, 0, 0,
                             10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopId)), nullptr, nullptr);
+    details_ = CreateWindowExW(0, L"BUTTON", L"More info", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10, hwnd_,
+                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailsId)), nullptr, nullptr);
     basketText_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_PATHELLIPSIS | SS_NOPREFIX | SS_CENTERIMAGE, 0, 0, 10, 10, hwnd_,
                                   nullptr, nullptr, nullptr);
     bBasketDel_ = CreateWindowExW(0, L"BUTTON", L"Delete Basket...", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10, hwnd_,
@@ -539,6 +541,7 @@ void MainWindow::Layout() {
     MoveWindow(prog_, navW + pad, S(42), w - navW - 3 * pad - stopW, S(8), TRUE);
     MoveWindow(stats_, navW + pad, S(58), w - navW - 3 * pad - stopW, S(22), TRUE);
     MoveWindow(stop_, w - pad - stopW, S(12), stopW, S(32), TRUE);
+    MoveWindow(details_, w - pad - stopW, S(50), stopW, S(26), TRUE);
     for (auto& p : pages_)
         if (p) MoveWindow(p->hwnd(), navW, hdr, std::max(0, w - navW), std::max(0, h - hdr), TRUE);
     InvalidateRect(hwnd_, nullptr, TRUE);
@@ -887,6 +890,11 @@ void MainWindow::UpdateScanUi() {
     bool s = scanning_;
     EnableWindow(stop_, s);
     ShowWindow(prog_, s ? SW_SHOW : SW_HIDE);
+    ShowWindow(details_, s ? SW_SHOW : SW_HIDE);
+    if (!s) {
+        showDetails_ = false;
+        SetWindowTextW(details_, L"More info");
+    }
     if (s) SendMessageW(prog_, PBM_SETMARQUEE, TRUE, 30);  // indeterminate: total work is unknown up front
     else SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
     for (auto& p : pages_)
@@ -900,7 +908,7 @@ void MainWindow::OnScanProgress() {
         p = progress_;
     }
     if (!scanning_) return;
-    SetStatus(L"Scanning: " + p.currentPath);
+    SetStatus(showDetails_ ? L"Scanning: " + p.currentPath : L"Scanning...");
     SetWindowTextW(stats_, (L"Files: " + FormatCount(p.files) + L"     Folders: " + FormatCount(p.dirs) +
                             L"     Size analyzed: " + FormatBytes(p.bytes) + L"     Elapsed: " + FormatDuration(p.elapsedMs) +
                             (p.errors ? L"     Inaccessible: " + FormatCount(p.errors) : L""))
@@ -1229,6 +1237,12 @@ LRESULT MainWindow::OnMessage(UINT m, WPARAM w, LPARAM l) {
             break;
         case WM_COMMAND:
             if (LOWORD(w) == kStopId) StopScan();
+            else if (LOWORD(w) == kDetailsId) {
+                showDetails_ = !showDetails_;
+                SetWindowTextW(details_, showDetails_ ? L"Less info" : L"More info");
+                InvalidateRect(details_, nullptr, TRUE);
+                OnScanProgress();
+            }
             else if (LOWORD(w) == kBasketDelId) DeleteBasket();
             else if (LOWORD(w) == kBasketClearId) ClearBasket();
             return 0;
