@@ -1,0 +1,9 @@
+build/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exe
+*.bin
+settings.json
+history.csv

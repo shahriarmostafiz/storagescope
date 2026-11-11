@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # build.bat finds Visual Studio with vswhere (preinstalled on the runner) and builds core + tests + app.
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash build\StorageScope.exe -Algorithm SHA256).Hash
+          "$h  StorageScope.exe" | Out-File build\StorageScope.exe.sha256 -Encoding ascii
+          $h
+
+      # The unsigned exe is uploaded as an artifact. SignPath signs this artifact once the project is approved.
+      - name: Upload unsigned exe
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorageScope-unsigned
+          path: |
+            build/StorageScope.exe
+            build/StorageScope.exe.sha256
+
+      # --- Enable after SignPath Foundation approves the project -------------------------------------------
+      # 1. Install the "SignPath" GitHub app for this repository and add repository secret SIGNPATH_API_TOKEN.
+      # 2. Fill in the organization id (repository variable SIGNPATH_ORG_ID) and the project/policy slugs
+      #    shown in your SignPath project, then remove the "if: false" line.
+      - name: Sign with SignPath
+        if: false
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: storagescope
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
