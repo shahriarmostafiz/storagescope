@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write  # needed to attach files to a GitHub Release on tag builds
+
 jobs:
   build:
     runs-on: windows-latest
@@ -17,6 +20,11 @@ jobs:
       - name: Build
         shell: cmd
         run: build.bat
+
+      # Exits non-zero when a check fails, so a broken commit fails the run.
+      - name: Test
+        shell: cmd
+        run: build\StorageScopeTests.exe
 
       - name: Checksum
         shell: pwsh
@@ -34,6 +42,18 @@ jobs:
           path: |
             build/StorageScope.exe
             build/StorageScope.exe.sha256
+
+      # Tag builds (git tag v1.1.0 && git push origin v1.1.0) publish a GitHub Release with the exe and checksum.
+      # The checksum is also written into the notes so the website can show it. Unsigned until SignPath is enabled.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $sha = (Get-Content build\StorageScope.exe.sha256).Split(' ')[0]
+          "SHA-256: $sha`n`nThe exe is not code-signed yet. If Windows SmartScreen warns, click More info, then Run anyway." | Out-File notes.md -Encoding utf8
+          gh release create "${{ github.ref_name }}" build\StorageScope.exe build\StorageScope.exe.sha256 --title "${{ github.ref_name }}" --generate-notes --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # --- Enable after SignPath Foundation approves the project -------------------------------------------
       # 1. Install the "SignPath" GitHub app for this repository and add repository secret SIGNPATH_API_TOKEN.
