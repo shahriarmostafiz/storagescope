@@ -105,6 +105,7 @@ private:
     bool OnCreate();
     void MakeFonts();
     void Layout();
+    int HeaderH() const;
     void PaintNav(HWND h);
     void UpdateScanUi();
     void OnScanProgress();

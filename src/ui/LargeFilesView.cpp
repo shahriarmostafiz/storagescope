@@ -18,7 +18,6 @@ namespace ss {
 namespace {
 
 enum { ID_SIZE = 1, ID_CUSTOM, ID_TYPE, ID_LIST, ID_INFO, ID_EMPTY, ID_OPEN, ID_RECYCLE, ID_PERM, ID_NOTE, ID_SORT, ID_DIR, ID_REFRESH, ID_STALE, ID_BASKET };
-const int kSortCols[] = {1 /*size*/, 0 /*name*/, 2 /*type*/, 3 /*location*/, 4 /*modified*/};  // combo order -> Col
 enum Col { C_NAME, C_SIZE, C_TYPE, C_LOC, C_MOD, C_COUNT };
 
 std::wstring LowerExt(const ScanNode* n) {
@@ -41,6 +40,8 @@ void LargeFilesView::OnCreate() {
     edCustom_ = Make(L"EDIT", L"250", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, ID_CUSTOM, WS_EX_CLIENTEDGE);
     lblMb_ = Make(L"STATIC", L"MB", SS_LEFT | SS_CENTERIMAGE, 0);
     EnableWindow(edCustom_, FALSE);
+    ShowWindow(edCustom_, SW_HIDE);  // only shown while "Custom" is chosen
+    ShowWindow(lblMb_, SW_HIDE);
     lblType_ = Make(L"STATIC", L"Type:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbType_ = Make(L"SSCombo", L"File type", WS_TABSTOP, ID_TYPE);
     SendMessageW(cbType_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All types"));
@@ -54,11 +55,6 @@ void LargeFilesView::OnCreate() {
     SendMessageW(cbStale_, CB_SETCURSEL, 0, 0);
     bBasket_ = Make(L"BUTTON", L"Add to Basket", WS_TABSTOP | BS_OWNERDRAW, ID_BASKET);
 
-    sortCb_ = Make(L"SSCombo", L"Sort by", WS_TABSTOP, ID_SORT);
-    for (const wchar_t* s : {L"Sort: Size", L"Sort: Name", L"Sort: Type", L"Sort: Location", L"Sort: Date modified"})
-        SendMessageW(sortCb_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-    dirBtn_ = Make(L"BUTTON", L"Descending", WS_TABSTOP | BS_OWNERDRAW, ID_DIR);
-    SyncSortUi();
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
     ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_CHECKBOXES);
@@ -75,59 +71,74 @@ void LargeFilesView::OnCreate() {
         c.fmt = defs[i].fmt;
         SendMessageW(list_, LVM_INSERTCOLUMNW, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&c));
     }
+    SyncSortUi();
     info_ = Make(L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, ID_INFO);
     empty_ = Make(L"STATIC", L"", SS_CENTER | SS_NOPREFIX, ID_EMPTY);
     bOpen_ = Make(L"BUTTON", L"Open File Location", WS_TABSTOP | BS_OWNERDRAW, ID_OPEN);
-    bRecycle_ = Make(L"BUTTON", L"Recycle Selected", WS_TABSTOP | BS_OWNERDRAW, ID_RECYCLE);
-    bPerm_ = Make(L"BUTTON", L"Permanent Delete Selected", WS_TABSTOP | BS_OWNERDRAW, ID_PERM);
+    bRecycle_ = Make(L"BUTTON", L"Move to Recycle Bin", WS_TABSTOP | BS_OWNERDRAW, ID_RECYCLE);
+    bPerm_ = Make(L"BUTTON", L"Delete Permanently", WS_TABSTOP | BS_OWNERDRAW, ID_PERM);
     bRefresh_ = Make(L"BUTTON", L"Refresh", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);  // drops vanished files now, then rescans (also F5)
-    note_ = Make(L"STATIC", L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.",
-                 SS_LEFT | SS_NOPREFIX, ID_NOTE);
+    note_ = Make(L"SSInfo", L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.", WS_TABSTOP, ID_NOTE);
 }
 
 void LargeFilesView::Layout(int w, int h) {
-    int m = mw_->S(12), y = mw_->S(10), ch = mw_->S(28);
-    int x = m;
-    auto put = [&](HWND hh, int ww) {
-        MoveWindow(hh, x, y, mw_->S(ww), ch, TRUE);
-        x += mw_->S(ww) + mw_->S(8);
-    };
-    put(lblSize_, 90);
-    put(cbSize_, 110);
-    put(edCustom_, 70);
-    put(lblMb_, 30);
-    x += mw_->S(16);
-    put(lblType_, 40);
-    put(cbType_, 140);
-    // second row: stale filter on the left, sort on the right, result summary in between
-    y += mw_->S(44);
-    x = m;
-    put(lblStale_, 110);
-    put(cbStale_, 230);
-    int dw = mw_->S(104), cbw = mw_->S(190);
-    MoveWindow(dirBtn_, w - m - dw, y - mw_->S(2), dw, ch + mw_->S(4), TRUE);
-    MoveWindow(sortCb_, w - m - dw - m - cbw, y, cbw, mw_->S(240), TRUE);
-    MoveWindow(info_, x + mw_->S(8), y, std::max(10, w - m - dw - m - cbw - m - x - mw_->S(8)), ch, TRUE);
-    int top = mw_->S(96), bottom = h - mw_->S(88);
-    MoveWindow(list_, 0, top, w, std::max(0, bottom - top), TRUE);
-    MoveWindow(note_, m, bottom + mw_->S(6), w - 2 * m, mw_->S(22), TRUE);
-    int by = h - mw_->S(48), bx = m;
-    struct B {
+    lastW_ = w;
+    lastH_ = h;
+    int m = mw_->S(12), gap = mw_->S(8), ch = mw_->S(34), bh = mw_->S(32);
+    bool custom = SendMessageW(cbSize_, CB_GETCURSEL, 0, 0) == 4;
+    ShowWindow(edCustom_, custom ? SW_SHOW : SW_HIDE);
+    ShowWindow(lblMb_, custom ? SW_SHOW : SW_HIDE);
+    // Filters flow left to right and wrap as a group (a label never ends up alone at the end of a row).
+    int x = m, y = mw_->S(8);
+    struct It {
         HWND h;
         int w;
-    } bs[] = {{bOpen_, 170}, {bBasket_, 150}, {bRecycle_, 150}, {bPerm_, 210}, {bRefresh_, 110}};
-    for (auto& b : bs) {
-        MoveWindow(b.h, bx, by, mw_->S(b.w), mw_->S(32), TRUE);
-        bx += mw_->S(b.w) + mw_->S(8);
-    }
+    };
+    auto group = [&](std::initializer_list<It> items) {
+        int total = 0;
+        for (auto& it : items) total += mw_->S(it.w) + gap;
+        if (x + total - gap > w - m && x > m) {
+            x = m;
+            y += ch + gap;
+        }
+        for (auto& it : items) {
+            MoveWindow(it.h, x, y, mw_->S(it.w), ch, TRUE);
+            x += mw_->S(it.w) + gap;
+        }
+        x += mw_->S(14);
+    };
+    group({{lblSize_, 96}, {cbSize_, 110}});
+    if (custom) group({{edCustom_, 70}, {lblMb_, 30}});
+    group({{lblType_, 44}, {cbType_, 150}});
+    group({{lblStale_, 112}, {cbStale_, 230}});
+    group({{bRefresh_, 100}});
+    y += ch + gap;
+    MoveWindow(info_, m, y, w - 2 * m, mw_->S(24), TRUE);
+    int top = y + mw_->S(28);
+    // Action buttons appear only while something is selected; they wrap in a narrow window.
+    const FlowItem btns[] = {{bOpen_, mw_->S(170)}, {bBasket_, mw_->S(150)}, {bRecycle_, mw_->S(190)}, {bPerm_, mw_->S(180)}};
+    int rows = FlowButtons(btns, 4, m, w, 0, bh, gap, false, false);
+    int barH = barShown_ ? rows * (bh + gap) + gap : 0;
+    int bottom = h - mw_->S(34) - barH;
+    MoveWindow(list_, 0, top, w, std::max(0, bottom - top), TRUE);
+    static const int kCols[C_COUNT] = {300, 90, 100, 300, 160};
+    FitColumns(list_, kCols, C_COUNT, w);
+    MoveWindow(note_, m, bottom + mw_->S(6), mw_->S(kInfoIconSize), mw_->S(kInfoIconSize), TRUE);  // the safety note is this icon's tooltip
+    FlowButtons(btns, 4, m, w, h - barH + gap, bh, gap, true, barShown_);
     int ew = std::min(w - 2 * m, mw_->S(520));
     MoveWindow(empty_, (w - ew) / 2, top + mw_->S(60), ew, mw_->S(48), TRUE);
 }
 
-void LargeFilesView::SyncSortUi() {
-    for (int i = 0; i < 5; ++i)
-        if (kSortCols[i] == sortCol_) SendMessageW(sortCb_, CB_SETCURSEL, static_cast<WPARAM>(i), 0);
-    SetWindowTextW(dirBtn_, sortAsc_ ? L"Ascending" : L"Descending");
+void LargeFilesView::SyncSortUi() {  // the sort order is shown as an arrow in the column header (click a header to sort)
+    HWND hdr = ListView_GetHeader(list_);
+    if (!hdr) return;
+    for (int i = 0; i < C_COUNT; ++i) {
+        HDITEMW it{HDI_FORMAT};
+        if (!Header_GetItem(hdr, i, &it)) continue;
+        it.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (i == sortCol_) it.fmt |= sortAsc_ ? HDF_SORTUP : HDF_SORTDOWN;
+        Header_SetItem(hdr, i, &it);
+    }
 }
 
 void LargeFilesView::DropReferences() {
@@ -178,7 +189,10 @@ void LargeFilesView::Rebuild() {
                 if (c.removed) continue;
                 if (c.attrs & FILE_ATTRIBUTE_SYSTEM) continue;  // system files are never shown
                 if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
-                if (c.type == NodeType::Directory) stack.push_back(&c);
+                if (c.type == NodeType::Directory) {
+                    if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // AppData / ProgramData: advanced
+                    stack.push_back(&c);
+                }
                 else if (c.type == NodeType::File && c.size >= minSize && c.modified <= staleCutoff &&
                          (cat == 0 || static_cast<int>(Categorize(c.name)) == cat - 1)) {
                     rows_.push_back(&c);
@@ -213,7 +227,15 @@ void LargeFilesView::Rebuild() {
     ShowWindow(list_, none ? SW_HIDE : SW_SHOW);
     ShowWindow(empty_, none ? SW_SHOW : SW_HIDE);
     if (none) SetWindowTextW(empty_, !sc ? mw_->EmptyStateText().c_str() : L"No files matching this filter were found.");
-    SetWindowTextW(info_, sc ? (FormatCount(rows_.size()) + L" files, " + FormatBytes(total) + L" in total").c_str() : L"");
+    std::wstring info = sc ? Plural(rows_.size(), L"file", L"files") + L", " + FormatBytes(total) + L" in total" : L"";
+    std::wstring tip = L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.";
+    if (sc && !mw_->settings().showAppData)
+        if (uint64_t hiddenApp = AppDataBytes(sc->root.get())) {
+            info += L"   -   " + FormatBytes(hiddenApp) + L" of app data hidden";
+            tip += L"\n\nApp data (AppData and ProgramData) is hidden from this list by default. Turn on \"Show app data\" in Settings > Scan to include it.";
+        }
+    SetWindowTextW(info_, info.c_str());
+    SetWindowTextW(note_, tip.c_str());  // the tooltip of the "i" icon
     UpdateButtons();
 }
 
@@ -245,6 +267,10 @@ void LargeFilesView::UpdateButtons() {
     if (ok && sel.size() <= 300)
         for (auto* n : sel)
             if (mw_->protection().Classify(BuildPath(n)).level >= ProtectionLevel::NoDelete) ok = false;
+    if (barShown_ != !sel.empty()) {  // the action bar is only there while something is selected
+        barShown_ = !sel.empty();
+        Layout(lastW_, lastH_);
+    }
     EnableWindow(bOpen_, sel.size() == 1);
     EnableWindow(bRecycle_, ok);
     EnableWindow(bPerm_, ok);
@@ -352,18 +378,7 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if (id == ID_SIZE && code == CBN_SELCHANGE) {
                 EnableWindow(edCustom_, SendMessageW(cbSize_, CB_GETCURSEL, 0, 0) == 4);
-                Rebuild();
-            } else if (id == ID_SORT && code == CBN_SELCHANGE) {
-                int i = static_cast<int>(SendMessageW(sortCb_, CB_GETCURSEL, 0, 0));
-                if (i >= 0 && i < 5) {
-                    sortCol_ = kSortCols[i];
-                    sortAsc_ = (sortCol_ == C_NAME || sortCol_ == C_TYPE || sortCol_ == C_LOC);  // size/date: biggest/newest first
-                    SyncSortUi();
-                    Rebuild();
-                }
-            } else if (id == ID_DIR && code == BN_CLICKED) {
-                sortAsc_ = !sortAsc_;
-                SyncSortUi();
+                Layout(lastW_, lastH_);  // shows or hides the custom-size box
                 Rebuild();
             } else if ((id == ID_TYPE || id == ID_STALE) && code == CBN_SELCHANGE) {
                 Rebuild();

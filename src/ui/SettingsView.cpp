@@ -14,7 +14,7 @@
 
 namespace ss {
 namespace {
-enum { ID_HIDDEN = 1, ID_SYSTEM, ID_R24, ID_R7, ID_R30, ID_ASK, ID_SECOND, ID_WORKERS, ID_LOGS, ID_X1, ID_X2, ID_SAFETY, ID_THEME, ID_IGNLIST, ID_ADD, ID_REMOVE, ID_HIST, ID_CLEARHIST, ID_REMEMBER, ID_AUTOUPD, ID_CLEARSCAN };
+enum { ID_HIDDEN = 1, ID_R24, ID_ASK, ID_SECOND, ID_WORKERS, ID_LOGS, ID_X1, ID_SAFETY, ID_THEME, ID_IGNLIST, ID_ADD, ID_REMOVE, ID_HIST, ID_CLEARHIST, ID_REMEMBER, ID_AUTOUPD, ID_CLEARSCAN, ID_EMPTYIGN, ID_APPDATA };
 const unsigned kWorkers[] = {0, 1, 2, 4, 8};
 }  // namespace
 
@@ -23,23 +23,24 @@ void SettingsView::OnCreate() {
     cbTheme_ = Make(L"SSCombo", L"Theme", WS_TABSTOP, ID_THEME);
     for (const wchar_t* s : {L"Theme: Follow Windows", L"Theme: Light", L"Theme: Dark"})
         SendMessageW(cbTheme_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
+    lblAccent_ = Make(L"STATIC", L"Accent color", SS_LEFT | SS_CENTERIMAGE, 0);
+    for (int i = 0; i < AccentCount(); ++i) {
+        swatch_[i] = Make(L"BUTTON", AccentName(i), WS_TABSTOP | BS_OWNERDRAW, kAccentSwatchBase + i);
+    }
+    accentName_ = Make(L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, 0);
     hdrScan_ = Make(L"STATIC", L"Scan", SS_LEFT, 0);
-    skipReparse_ = Make(L"BUTTON", L"Skip reparse points - always on", WS_TABSTOP | BS_AUTOCHECKBOX, ID_X1);
-    skipDenied_ = Make(L"BUTTON", L"Skip inaccessible folders - always on", WS_TABSTOP | BS_AUTOCHECKBOX, ID_X2);
-    EnableWindow(skipReparse_, FALSE);
-    EnableWindow(skipDenied_, FALSE);
-    SendMessageW(skipReparse_, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessageW(skipDenied_, BM_SETCHECK, BST_CHECKED, 0);
-    showHidden_ = Make(L"BUTTON", L"Show hidden files", WS_TABSTOP | BS_AUTOCHECKBOX, ID_HIDDEN);
+    skipReparse_ = Make(L"STATIC", L"Always skipped: reparse points (junctions and symbolic links) and folders you cannot open.", SS_LEFT | SS_NOPREFIX, ID_X1);
+    showHidden_ = Make(L"SSCheck", L"Show hidden files", WS_TABSTOP, ID_HIDDEN);
+    showAppData_ = Make(L"SSCheck", L"Show app data (advanced): AppData and ProgramData folders", WS_TABSTOP, ID_APPDATA);
 
-    hdrTemp_ = Make(L"STATIC", L"Temporary file cleanup - default age", SS_LEFT, 0);
+    hdrTemp_ = Make(L"STATIC", L"Temporary file cleanup (default age)", SS_LEFT, 0);
     cbAge_ = Make(L"SSCombo", L"Temporary file age", WS_TABSTOP, ID_R24);
     for (const wchar_t* s : {L"Files older than 24 hours", L"Files older than 7 days", L"Files older than 30 days"})
         SendMessageW(cbAge_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
 
     hdrDel_ = Make(L"STATIC", L"Deletion", SS_LEFT, 0);
-    askRecycle_ = Make(L"BUTTON", L"Ask before moving to Recycle Bin", WS_TABSTOP | BS_AUTOCHECKBOX, ID_ASK);
-    second_ = Make(L"BUTTON", L"Require second confirmation for permanent deletion", WS_TABSTOP | BS_AUTOCHECKBOX, ID_SECOND);
+    askRecycle_ = Make(L"SSCheck", L"Ask before moving to Recycle Bin", WS_TABSTOP, ID_ASK);
+    second_ = Make(L"SSCheck", L"Require second confirmation for permanent deletion", WS_TABSTOP, ID_SECOND);
 
     hdrPerf_ = Make(L"STATIC", L"Performance", SS_LEFT, 0);
     lblWorkers_ = Make(L"STATIC", L"Scanner workers:", SS_LEFT | SS_CENTERIMAGE, 0);
@@ -47,19 +48,20 @@ void SettingsView::OnCreate() {
     for (const wchar_t* s : {L"Auto", L"1", L"2", L"4", L"8"}) SendMessageW(cbWorkers_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
 
     hdrMem_ = Make(L"STATIC", L"Scan memory and updates", SS_LEFT, 0);
-    remember_ = Make(L"BUTTON", L"Remember the last scan (stores file and folder names on this PC)", WS_TABSTOP | BS_AUTOCHECKBOX, ID_REMEMBER);
-    autoUpd_ = Make(L"BUTTON", L"Keep results up to date automatically", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTOUPD);
+    remember_ = Make(L"SSCheck", L"Remember the last scan (stores file and folder names on this PC)", WS_TABSTOP, ID_REMEMBER);
+    autoUpd_ = Make(L"SSCheck", L"Keep results up to date automatically", WS_TABSTOP, ID_AUTOUPD);
     memInfo_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, 0);
     bClearScan_ = Make(L"BUTTON", L"Clear saved scan", WS_TABSTOP | BS_OWNERDRAW, ID_CLEARSCAN);
     hdrPriv_ = Make(L"STATIC", L"Privacy", SS_LEFT, 0);
-    history_ = Make(L"BUTTON", L"Remember free space per day (no file names)", WS_TABSTOP | BS_AUTOCHECKBOX, ID_HIST);
+    history_ = Make(L"SSCheck", L"Remember free space per day (no file names)", WS_TABSTOP, ID_HIST);
     bClearHist_ = Make(L"BUTTON", L"Clear history", WS_TABSTOP | BS_OWNERDRAW, ID_CLEARHIST);
     hdrIgnore_ = Make(L"STATIC", L"Ignored folders and drives", SS_LEFT, 0);
-    noteIgnore_ = Make(L"STATIC",
+    noteIgnore_ = Make(L"SSInfo",
                        L"Scans skip these completely: nothing inside them is counted or shown. Changes apply to the results on screen "
                        L"at once; entries you remove come back after the next scan or Refresh.",
-                       SS_LEFT | SS_NOPREFIX, 0);
+                       WS_TABSTOP, 0);
     ignoreList_ = Make(L"LISTBOX", L"", WS_TABSTOP | WS_VSCROLL | WS_HSCROLL | WS_BORDER | LBS_NOTIFY | LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT, ID_IGNLIST);
+    emptyIgn_ = Make(L"STATIC", L"No ignored folders or drives. Use Add Folder or Drive to skip one.", SS_OWNERDRAW, ID_EMPTYIGN);
     bAdd_ = Make(L"BUTTON", L"Add Folder or Drive...", WS_TABSTOP | BS_OWNERDRAW, ID_ADD);
     bRemove_ = Make(L"BUTTON", L"Remove Selected", WS_TABSTOP | BS_OWNERDRAW | WS_DISABLED, ID_REMOVE);
 
@@ -71,62 +73,77 @@ void SettingsView::OnCreate() {
 
 void SettingsView::Layout(int w, int h) {
     if (!BeginLayout(w, h)) return;
-    int x = mw_->S(20), y = mw_->S(14) - scrollY_, rowH = mw_->S(26), cw = std::max(100, w - 2 * x);
+    int x = mw_->S(20), y = mw_->S(14) - scrollY_, rowH = mw_->S(28), comboH = mw_->S(34), cw = std::max(100, w - 2 * x);
+    bool wide = w >= mw_->S(900);
+    if (wide) cw = mw_->S(500) - x - mw_->S(24);  // the left column stops before the ignore-list column
+    int sec = mw_->S(24), tight = mw_->S(6);  // gap above a section heading / between a heading and its first control
+    bool first = true;
     auto hdr = [&](HWND hh) {
+        if (!first) y += sec;
+        first = false;
         SendMessageW(hh, WM_SETFONT, reinterpret_cast<WPARAM>(mw_->boldFont()), TRUE);
         MoveWindow(hh, x, y, cw, rowH, TRUE);
-        y += rowH + mw_->S(2);
+        y += rowH + tight;
     };
     auto row = [&](HWND hh) {
         MoveWindow(hh, x + mw_->S(12), y, cw - mw_->S(12), rowH, TRUE);
-        y += rowH;
+        y += rowH + mw_->S(2);
+    };
+    auto combo = [&](HWND hh, int ww) {
+        MoveWindow(hh, x + mw_->S(12), y, ww, comboH, TRUE);
+        y += comboH;
     };
     hdr(hdrTheme_);
-    MoveWindow(cbTheme_, x + mw_->S(12), y, mw_->S(220), mw_->S(200), TRUE);
-    y += rowH + mw_->S(14);
+    combo(cbTheme_, mw_->S(220));
+    y += mw_->S(10);
+    int sw = mw_->S(28), gap = mw_->S(6), sx = x + mw_->S(12);
+    MoveWindow(lblAccent_, sx, y, mw_->S(104), sw, TRUE);
+    for (int i = 0; i < AccentCount(); ++i) MoveWindow(swatch_[i], sx + mw_->S(106) + i * (sw + gap), y, sw, sw, TRUE);
+    MoveWindow(accentName_, sx + mw_->S(106) + AccentCount() * (sw + gap) + mw_->S(4), y, mw_->S(80), sw, TRUE);
+    y += sw;
     hdr(hdrScan_);
-    row(skipReparse_);
-    row(skipDenied_);
     row(showHidden_);
-    y += mw_->S(12);
+    row(showAppData_);
+    int skipH = cw > mw_->S(500) ? mw_->S(26) : mw_->S(50);  // one line when wide, two when narrow
+    MoveWindow(skipReparse_, x + mw_->S(12), y, cw - mw_->S(12), skipH, TRUE);
+    y += skipH + mw_->S(2);
     hdr(hdrTemp_);
-    MoveWindow(cbAge_, x + mw_->S(12), y, mw_->S(260), mw_->S(200), TRUE);
-    y += rowH + mw_->S(4);
-    y += mw_->S(12);
+    combo(cbAge_, mw_->S(260));
     hdr(hdrDel_);
     row(askRecycle_);
     row(second_);
-    y += mw_->S(12);
     hdr(hdrPerf_);
-    MoveWindow(lblWorkers_, x + mw_->S(12), y, mw_->S(130), rowH, TRUE);
-    MoveWindow(cbWorkers_, x + mw_->S(150), y, mw_->S(100), mw_->S(200), TRUE);
-    y += rowH + mw_->S(12);
+    MoveWindow(lblWorkers_, x + mw_->S(12), y, mw_->S(130), comboH, TRUE);
+    MoveWindow(cbWorkers_, x + mw_->S(150), y, mw_->S(100), comboH, TRUE);
+    y += comboH;
     hdr(hdrMem_);
     row(remember_);
     row(autoUpd_);
     row(memInfo_);
-    MoveWindow(bClearScan_, x + mw_->S(12), y + mw_->S(4), mw_->S(160), mw_->S(32), TRUE);
-    y += mw_->S(48);
+    MoveWindow(bClearScan_, x + mw_->S(12), y + mw_->S(2), mw_->S(160), mw_->S(32), TRUE);
+    y += mw_->S(34);
     hdr(hdrPriv_);
     row(history_);
-    MoveWindow(bClearHist_, x + mw_->S(12), y + mw_->S(4), mw_->S(160), mw_->S(32), TRUE);
-    y += mw_->S(48);
+    MoveWindow(bClearHist_, x + mw_->S(12), y + mw_->S(2), mw_->S(160), mw_->S(32), TRUE);
+    y += mw_->S(34) + sec;
     MoveWindow(safety_, x, y, cw, rowH, TRUE);
     y += rowH + mw_->S(10);
     MoveWindow(bLogs_, x, y, mw_->S(130), mw_->S(32), TRUE);
 
     // Right column (below the left one on narrow windows): the ignore list
     int rx = x, ry = y + mw_->S(48);
-    if (w >= mw_->S(900)) {
-        rx = mw_->S(470);
+    if (wide) {
+        rx = mw_->S(500);
         ry = mw_->S(14) - scrollY_;
     }
     int rw = std::max(mw_->S(200), w - rx - x);
     SendMessageW(hdrIgnore_, WM_SETFONT, reinterpret_cast<WPARAM>(mw_->boldFont()), TRUE);
-    MoveWindow(hdrIgnore_, rx, ry, rw, rowH, TRUE);
-    MoveWindow(noteIgnore_, rx, ry + rowH + mw_->S(2), rw, mw_->S(68), TRUE);
-    int ly = ry + rowH + mw_->S(76);
+    MoveWindow(hdrIgnore_, rx, ry, std::min(rw, mw_->S(236)), rowH, TRUE);
+    int ic = mw_->S(kInfoIconSize);
+    MoveWindow(noteIgnore_, rx + std::min(rw, mw_->S(236)) + mw_->S(4), ry + (rowH - ic) / 2, ic, ic, TRUE);  // the explanation is this icon's tooltip
+    int ly = ry + rowH + mw_->S(8);
     MoveWindow(ignoreList_, rx, ly, rw, mw_->S(210), TRUE);
+    MoveWindow(emptyIgn_, rx, ly, rw, mw_->S(210), TRUE);
     MoveWindow(bAdd_, rx, ly + mw_->S(220), mw_->S(210), mw_->S(34), TRUE);
     MoveWindow(bRemove_, rx + mw_->S(220), ly + mw_->S(220), mw_->S(170), mw_->S(34), TRUE);
 
@@ -135,8 +152,15 @@ void SettingsView::Layout(int w, int h) {
 
 void SettingsView::FillIgnoreList() {
     SendMessageW(ignoreList_, LB_RESETCONTENT, 0, 0);
-    for (const auto& p : mw_->settings().ignored) SendMessageW(ignoreList_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(p.c_str()));
-    SendMessageW(ignoreList_, LB_SETHORIZONTALEXTENT, mw_->S(1200), 0);
+    size_t longest = 0;
+    for (const auto& p : mw_->settings().ignored) {
+        SendMessageW(ignoreList_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(p.c_str()));
+        longest = std::max(longest, p.size());
+    }
+    SendMessageW(ignoreList_, LB_SETHORIZONTALEXTENT, static_cast<WPARAM>(longest * mw_->S(9) + mw_->S(24)), 0);  // scrollbar only if a path is wider than the list
+    bool none = mw_->settings().ignored.empty();
+    ShowWindow(ignoreList_, none ? SW_HIDE : SW_SHOW);
+    ShowWindow(emptyIgn_, none ? SW_SHOW : SW_HIDE);
     UpdateRemoveButton();
 }
 
@@ -201,6 +225,7 @@ void SettingsView::Load() {
     loading_ = true;
     const Settings& s = mw_->settings();
     SendMessageW(showHidden_, BM_SETCHECK, s.showHidden ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(showAppData_, BM_SETCHECK, s.showAppData ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(askRecycle_, BM_SETCHECK, s.askBeforeRecycle ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(second_, BM_SETCHECK, s.requireSecondPermanentConfirm ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(cbAge_, CB_SETCURSEL, s.tempAgeHours == 168 ? 1 : s.tempAgeHours == 720 ? 2 : 0, 0);
@@ -209,6 +234,7 @@ void SettingsView::Load() {
         if (kWorkers[i] == s.workers) sel = i;
     SendMessageW(cbWorkers_, CB_SETCURSEL, static_cast<WPARAM>(sel), 0);
     SendMessageW(cbTheme_, CB_SETCURSEL, s.theme, 0);
+    SetWindowTextW(accentName_, AccentName(static_cast<int>(s.accent)));
     SendMessageW(history_, BM_SETCHECK, s.keepHistory ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(remember_, BM_SETCHECK, s.rememberScan ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(autoUpd_, BM_SETCHECK, s.autoUpdate ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -221,6 +247,7 @@ void SettingsView::Store() {
     if (loading_) return;
     Settings& s = mw_->settings();
     s.showHidden = SendMessageW(showHidden_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    s.showAppData = SendMessageW(showAppData_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.askBeforeRecycle = SendMessageW(askRecycle_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.requireSecondPermanentConfirm = SendMessageW(second_, BM_GETCHECK, 0, 0) == BST_CHECKED;
     int ai = static_cast<int>(SendMessageW(cbAge_, CB_GETCURSEL, 0, 0));
@@ -238,8 +265,37 @@ void SettingsView::Store() {
 }
 
 LRESULT SettingsView::OnMessage(UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_DRAWITEM && l && reinterpret_cast<DRAWITEMSTRUCT*>(l)->hwndItem == emptyIgn_) {  // looks like the (empty) list it stands in for
+        auto* d = reinterpret_cast<DRAWITEMSTRUCT*>(l);
+        const Theme& c = Colors();
+        FillRect(d->hDC, &d->rcItem, PanelBrush());
+        HBRUSH fb = CreateSolidBrush(c.border);
+        FrameRect(d->hDC, &d->rcItem, fb);
+        DeleteObject(fb);
+        SetBkMode(d->hDC, TRANSPARENT);
+        SetTextColor(d->hDC, c.muted);
+        wchar_t t[128] = L"";
+        GetWindowTextW(emptyIgn_, t, 128);
+        RECT tr = d->rcItem;
+        InflateRect(&tr, -mw_->S(24), 0);
+        HGDIOBJ of = SelectObject(d->hDC, mw_->font());
+        RECT calc = tr;
+        DrawTextW(d->hDC, t, -1, &calc, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+        tr.top += (tr.bottom - tr.top - (calc.bottom - calc.top)) / 2;
+        DrawTextW(d->hDC, t, -1, &tr, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(d->hDC, of);
+        return TRUE;
+    }
     if (m == WM_COMMAND) {
         int id = LOWORD(w);
+        if (id >= kAccentSwatchBase && id < kAccentSwatchBase + AccentCount()) {
+            if (HIWORD(w) == BN_CLICKED && mw_->settings().accent != static_cast<uint32_t>(id - kAccentSwatchBase)) {
+                mw_->settings().accent = static_cast<uint32_t>(id - kAccentSwatchBase);
+                SetWindowTextW(accentName_, AccentName(id - kAccentSwatchBase));
+                mw_->SettingsChanged();  // saves, re-applies the theme and repaints everything
+            }
+            return 0;
+        }
         if (id == ID_LOGS) explorer::OpenFolder(Logger::Get().Dir());
         else if (id == ID_CLEARHIST) {
             History::Clear();

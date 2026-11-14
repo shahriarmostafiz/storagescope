@@ -10,7 +10,7 @@ namespace {
 const wchar_t* kWindows = L"Protected by Windows";
 const wchar_t* kInstalledApps = L"Installed applications should normally be removed through Windows Settings.";
 const wchar_t* kDataRoot = L"This folder holds the data of every application and cannot be deleted. You can delete items inside it.";
-const wchar_t* kAppData =L"May contain important application data. Only delete what you recognise.";
+const wchar_t* kAppData =L"May contain important application data. Only delete what you recognize.";
 
 // Names directly under any drive root that are boot/recovery/system files.
 const wchar_t* kRootNames[] = {L"System Volume Information", L"Recovery",     L"EFI",          L"Boot",

@@ -17,8 +17,8 @@ namespace ss {
 namespace {
 
 enum {
-    ID_LIST = 1, ID_UP, ID_SEARCH, ID_OPEN, ID_MANAGE, ID_DELETE, ID_RECYCLE, ID_PERM, ID_REFRESH, ID_APPS, ID_STATUS, ID_EMPTY,
-    ID_SCAN, ID_SORT, ID_DIR, ID_BASKET,
+    ID_LIST = 1, ID_UP, ID_SEARCH, ID_OPEN, ID_MANAGE, ID_RECYCLE, ID_PERM, ID_REFRESH, ID_APPS, ID_STATUS, ID_EMPTY,
+    ID_SCAN, ID_SORT, ID_DIR, ID_BASKET, ID_INFOICON,
     // context menu
     M_OPEN = 100, M_LOCATION, M_COPY, M_PROPS, M_RECYCLE, M_PERM, M_BASKET
 };
@@ -63,10 +63,6 @@ void AnalyzerView::OnCreate() {
     up_ = Make(L"BUTTON", L"Up", WS_TABSTOP | BS_OWNERDRAW, ID_UP);
     search_ = Make(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH);  // borderless: the rounded frame is painted by the page
     SendMessageW(search_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search files and folders"));
-    sortCb_ = Make(L"SSCombo", L"Sort by", WS_TABSTOP, ID_SORT);
-    for (const wchar_t* s : {L"Sort: Name", L"Sort: Type", L"Sort: Size", L"Sort: Date modified", L"Sort: Files", L"Sort: Folders"})
-        SendMessageW(sortCb_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-    dirBtn_ = Make(L"BUTTON", L"Descending", WS_TABSTOP | BS_OWNERDRAW, ID_DIR);
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
     ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP | LVS_EX_CHECKBOXES);
@@ -94,45 +90,48 @@ void AnalyzerView::OnCreate() {
 
     bOpen_ = Make(L"BUTTON", L"Open", WS_TABSTOP | BS_OWNERDRAW, ID_OPEN);
     bManage_ = Make(L"BUTTON", L"Manage", WS_TABSTOP | BS_OWNERDRAW, ID_MANAGE);
-    bDelete_ = Make(L"BUTTON", L"Delete...", WS_TABSTOP | BS_OWNERDRAW, ID_DELETE);
-    bRecycle_ = Make(L"BUTTON", L"Recycle Selected", WS_TABSTOP | BS_OWNERDRAW, ID_RECYCLE);
-    bPerm_ = Make(L"BUTTON", L"Permanent Delete Selected", WS_TABSTOP | BS_OWNERDRAW, ID_PERM);
+    bRecycle_ = Make(L"BUTTON", L"Move to Recycle Bin", WS_TABSTOP | BS_OWNERDRAW, ID_RECYCLE);
+    bPerm_ = Make(L"BUTTON", L"Delete Permanently", WS_TABSTOP | BS_OWNERDRAW, ID_PERM);
     bBasket_ = Make(L"BUTTON", L"Add to Basket", WS_TABSTOP | BS_OWNERDRAW, ID_BASKET);
     bRefresh_ = Make(L"BUTTON", L"Refresh", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);  // rescans the folder being shown (also F5)
     bApps_ = Make(L"BUTTON", L"Open Installed Apps", WS_TABSTOP | BS_OWNERDRAW, ID_APPS);
     ShowWindow(bApps_, SW_HIDE);
     status_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX | SS_PATHELLIPSIS, ID_STATUS);
+    infoIcon_ = Make(L"SSInfo", L"Folder sizes include app data (AppData and ProgramData). It is hidden from the lists by default. Turn on \"Show app data\" in Settings > Scan to list it.",
+                     WS_TABSTOP, ID_INFOICON);
+    ShowWindow(infoIcon_, SW_HIDE);
     empty_ = Make(L"STATIC", L"", SS_CENTER | SS_NOPREFIX, ID_EMPTY);
     bScan_ = Make(L"BUTTON", L"Scan a Drive", WS_TABSTOP | BS_OWNERDRAW, ID_SCAN);
     UpdateSortArrow();
 }
 
 void AnalyzerView::Layout(int w, int h) {
-    int m = mw_->S(12), band = mw_->S(46), bh = mw_->S(32);
+    lastW_ = w;
+    lastH_ = h;
+    int m = mw_->S(12), band = mw_->S(46), bh = mw_->S(32), gap = mw_->S(8);
     band_ = {0, 0, w, band};
     MoveWindow(up_, m, mw_->S(7), mw_->S(64), bh, TRUE);
     MoveWindow(bRefresh_, m + mw_->S(64) + mw_->S(8), mw_->S(7), mw_->S(100), bh, TRUE);
-    int sw = mw_->S(250), cbw = mw_->S(170), dw = mw_->S(104);
+    int sw = std::clamp(w / 4, mw_->S(170), mw_->S(260));
     int sx = w - m - sw;
     searchFrame_ = {sx, mw_->S(6), sx + sw, mw_->S(6) + mw_->S(34)};
     int eh = mw_->S(24), pad = mw_->S(12);
     MoveWindow(search_, sx + pad, searchFrame_.top + (mw_->S(34) - eh) / 2, sw - 2 * pad, eh, TRUE);
-    MoveWindow(dirBtn_, sx - m - dw, mw_->S(7), dw, bh, TRUE);
-    MoveWindow(sortCb_, sx - m - dw - m - cbw, mw_->S(9), cbw, mw_->S(240), TRUE);
-    crumbRight_ = sx - m - dw - m - cbw - m;
-    int listBottom = h - mw_->S(88);
+    crumbRight_ = sx - m;
+    // Action buttons appear only while something is selected; they wrap onto more rows in a narrow window.
+    const FlowItem btns[] = {{bOpen_, mw_->S(80)}, {bManage_, mw_->S(90)}, {bBasket_, mw_->S(150)}, {bRecycle_, mw_->S(190)}, {bPerm_, mw_->S(180)}};
+    int rows = FlowButtons(btns, 5, m, w, 0, bh, gap, false, false);
+    int barH = barShown_ ? rows * (bh + gap) + gap : 0;
+    int listBottom = h - mw_->S(34) - barH;
     MoveWindow(list_, 0, band, w, std::max(0, listBottom - band), TRUE);
-    MoveWindow(status_, m, listBottom + mw_->S(6), w - 2 * m, mw_->S(22), TRUE);
-    int y = h - mw_->S(48), x = m;
-    struct B {
-        HWND h;
-        int w;
-    } bs[] = {{bOpen_, 80}, {bManage_, 90}, {bDelete_, 100}, {bRecycle_, 150}, {bPerm_, 210}, {bBasket_, 150}};
-    for (auto& b : bs) {
-        MoveWindow(b.h, x, y, mw_->S(b.w), bh, TRUE);
-        x += mw_->S(b.w) + mw_->S(8);
-    }
-    MoveWindow(bApps_, x, y, mw_->S(170), bh, TRUE);
+    static const int kCols[C_COUNT] = {170, 70, 105, 105, 110, 110, 110, 150, 70};
+    FitColumns(list_, kCols, C_COUNT, w);
+    int ic = mw_->S(kInfoIconSize);
+    MoveWindow(status_, m, listBottom + mw_->S(4), w - 2 * m - ic - mw_->S(8), mw_->S(26), TRUE);
+    MoveWindow(infoIcon_, w - m - ic, listBottom + mw_->S(6), ic, ic, TRUE);  // explains hidden app data; shown only when some is hidden
+    POINT next{};
+    FlowButtons(btns, 5, m, w, h - barH + gap, bh, gap, true, barShown_, &next);
+    MoveWindow(bApps_, next.x, next.y, mw_->S(190), bh, TRUE);
     int ew = std::min(w - 2 * m, mw_->S(520));
     MoveWindow(empty_, (w - ew) / 2, band + mw_->S(70), ew, mw_->S(48), TRUE);
     MoveWindow(bScan_, (w - mw_->S(150)) / 2, band + mw_->S(126), mw_->S(150), bh, TRUE);
@@ -154,6 +153,7 @@ bool AnalyzerView::Visible(const ScanNode* n) const {
     const Settings& s = mw_->settings();
     if (!s.showHidden && (n->attrs & FILE_ATTRIBUTE_HIDDEN)) return false;
     if (n->attrs & FILE_ATTRIBUTE_SYSTEM) return false;  // system files are never shown
+    if (!s.showAppData && IsAppDataRoot(n)) return false;  // AppData / ProgramData: advanced (Settings > Scan)
     return true;
 }
 
@@ -252,10 +252,7 @@ void AnalyzerView::SortChanged() {
 
 void AnalyzerView::UpdateSortArrow() {
     static const int kCols[] = {C_NAME, C_TYPE, C_SIZE, C_MOD, C_FILES, C_DIRS};
-    for (int i = 0; i < 6; ++i)
-        if (kCols[i] == sortCol_ || (sortCol_ == C_PCT && kCols[i] == C_SIZE) || (sortCol_ == C_DISK && kCols[i] == C_SIZE))
-            SendMessageW(sortCb_, CB_SETCURSEL, static_cast<WPARAM>(i), 0);
-    SetWindowTextW(dirBtn_, sortAsc_ ? L"Ascending" : L"Descending");
+    (void)kCols;
     HWND hdr = ListView_GetHeader(list_);
     for (int i = 0; i < C_COUNT; ++i) {
         HDITEMW it{HDI_FORMAT};
@@ -295,6 +292,7 @@ void AnalyzerView::RunSearch() {
         if (!n->dir) continue;
         for (auto& c : n->dir->children) {
             if (c.removed) continue;
+            if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // hidden with everything inside it
             std::wstring childPath;
             if (pathMode) childPath = path::Join(dirPath, c.name);
             bool hit = pathMode ? ContainsNoCase(childPath, q) : ContainsNoCase(c.name, q);
@@ -420,15 +418,26 @@ void AnalyzerView::UpdateSelectionUi() {
     uint64_t total = 0;
     for (auto* n : sel) total += n->size;
     std::wstring s;
-    if (sel.empty()) s = rows_.empty() ? L"" : FormatCount(rows_.size()) + (rows_.size() == 1 ? L" item" : L" items");
-    else if (sel.size() == 1) s = FormatBytes(total) + L"   " + (note.empty() ? L"" : note);
-    else s = FormatCount(sel.size()) + L" items selected, total " + FormatBytes(total) + L"   " + (note.empty() ? L"" : note);
+    if (sel.empty()) {
+        s = rows_.empty() ? L"" : FormatCount(rows_.size()) + (rows_.size() == 1 ? L" item" : L" items");
+        uint64_t hiddenApp = (!mw_->settings().showAppData && !searchMode_) ? AppDataBytes(cur_) : 0;
+        if (hiddenApp) s += (s.empty() ? L"" : L"   -   ") + std::wstring(L"Includes ") + FormatBytes(hiddenApp) + L" of hidden app data";
+        ShowWindow(infoIcon_, hiddenApp ? SW_SHOW : SW_HIDE);
+    } else {
+        ShowWindow(infoIcon_, SW_HIDE);
+        if (sel.size() == 1) s = FormatBytes(total) + L"   " + (note.empty() ? L"" : note);
+        else s = FormatCount(sel.size()) + L" items selected, total " + FormatBytes(total) + L"   " + (note.empty() ? L"" : note);
+    }
     if (!(truncated_ && searchMode_)) SetWindowTextW(status_, s.c_str());
     else if (!sel.empty()) SetWindowTextW(status_, s.c_str());
 
+    if (barShown_ != !sel.empty()) {  // the action bar is only there while something is selected
+        barShown_ = !sel.empty();
+        Layout(lastW_, lastH_);
+    }
+    canDelete_ = canDelete;
     EnableWindow(bOpen_, sel.size() == 1);
     EnableWindow(bManage_, sel.size() == 1);
-    EnableWindow(bDelete_, canDelete);
     EnableWindow(bRecycle_, canDelete);
     EnableWindow(bPerm_, canDelete);
     EnableWindow(bBasket_, canDelete);
@@ -460,7 +469,6 @@ void AnalyzerView::Act(int id) {
         case M_LOCATION: explorer::Reveal(p, id == ID_MANAGE ? dirLike : false); break;
         case M_COPY: explorer::CopyText(mw_->hwnd(), p); break;
         case M_PROPS: explorer::ShowProperties(mw_->hwnd(), p); break;
-        case ID_DELETE: mw_->DeleteItems(sel, DeleteMode::Ask); break;
         case ID_RECYCLE:
         case M_RECYCLE: mw_->DeleteItems(sel, DeleteMode::Recycle); break;
         case ID_PERM:
@@ -502,15 +510,7 @@ void AnalyzerView::PaintBand() {
     {   // rounded search box frame (the edit control sits inside it)
         const Theme& t = Colors();
         bool focus = GetFocus() == search_;
-        HBRUSH b = CreateSolidBrush(t.panel);
-        HPEN pen = CreatePen(PS_SOLID, focus ? 2 : 1, focus ? t.accent : t.border);
-        HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, pen);
-        int r = mw_->S(10);
-        RoundRect(dc, searchFrame_.left, searchFrame_.top, searchFrame_.right, searchFrame_.bottom, r, r);
-        SelectObject(dc, ob);
-        SelectObject(dc, op);
-        DeleteObject(b);
-        DeleteObject(pen);
+        FillRoundRectAA(dc, searchFrame_, mw_->S(5), t.panel, focus ? t.accent : t.border, focus ? 2.f : 1.f);
     }
     SetBkMode(dc, TRANSPARENT);
     crumbs_.clear();
@@ -521,7 +521,7 @@ void AnalyzerView::PaintBand() {
     SelectObject(dc, mw_->font());
     if (sc && x1 > x0) {
         if (searchMode_) {
-            std::wstring t = L"Search results (" + FormatCount(rows_.size()) + L" items)";
+            std::wstring t = L"Search results (" + Plural(rows_.size(), L"item", L"items") + L")";
             SetTextColor(dc, Colors().muted);
             RECT r{x0, y0, x1, y1};
             DrawTextW(dc, t.c_str(), -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -629,7 +629,7 @@ LRESULT AnalyzerView::OnNotify(NMHDR* nm, LPARAM l) {
             if (k->wVKey == VK_F5) Act(ID_REFRESH);
             else if (k->wVKey == VK_RETURN) Act(ID_OPEN);
             else if (k->wVKey == VK_BACK) GoUp();
-            else if (k->wVKey == VK_DELETE && IsWindowEnabled(bDelete_)) Act(shift ? ID_PERM : ID_RECYCLE);
+            else if (k->wVKey == VK_DELETE && canDelete_) Act(shift ? ID_PERM : ID_RECYCLE);
             else if (k->wVKey == 'C' && ctrl) Act(M_COPY);
             else if (k->wVKey == VK_SPACE) {  // tick / untick the highlighted rows
                 for (int i = ListView_GetNextItem(list_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(list_, i, LVNI_SELECTED))
@@ -715,21 +715,6 @@ LRESULT AnalyzerView::OnMessage(UINT m, WPARAM w, LPARAM l) {
         case WM_COMMAND:
             switch (LOWORD(w)) {
                 case ID_UP: GoUp(); break;
-                case ID_DIR:
-                    sortAsc_ = !sortAsc_;
-                    SortChanged();
-                    break;
-                case ID_SORT:
-                    if (HIWORD(w) == CBN_SELCHANGE) {
-                        static const int kCols[] = {C_NAME, C_TYPE, C_SIZE, C_MOD, C_FILES, C_DIRS};
-                        int i = static_cast<int>(SendMessageW(sortCb_, CB_GETCURSEL, 0, 0));
-                        if (i >= 0 && i < 6) {
-                            sortCol_ = kCols[i];
-                            sortAsc_ = (sortCol_ == C_NAME || sortCol_ == C_TYPE);  // text ascending; size/date/count largest/newest first
-                            SortChanged();
-                        }
-                    }
-                    break;
                 case ID_APPS: explorer::OpenInstalledApps(); break;
                 case ID_SCAN: mw_->ShowPage(0); break;
                 case ID_SEARCH:

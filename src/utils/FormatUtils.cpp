@@ -26,6 +26,14 @@ std::wstring FormatCount(uint64_t n) {
     return s;
 }
 
+uint64_t NowFileTime() {
+    FILETIME f;
+    GetSystemTimeAsFileTime(&f);
+    return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+}
+
+std::wstring Plural(uint64_t n, const wchar_t* one, const wchar_t* many) { return FormatCount(n) + L" " + (n == 1 ? one : many); }
+
 std::wstring FormatFileTime(uint64_t ft) {
     if (ft == 0) return L"";
     FILETIME f{static_cast<DWORD>(ft), static_cast<DWORD>(ft >> 32)}, local;

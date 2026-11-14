@@ -10,10 +10,11 @@
 #include "ui/MainWindow.h"
 #include "ui/UiCommon.h"
 #include "utils/FormatUtils.h"
+#include "utils/ListState.h"
 
 namespace ss {
 namespace {
-enum { ID_LIST = 1, ID_REFRESH, ID_ALL, ID_NONE, ID_RESTORE, ID_DELETE, ID_EMPTY, ID_INFO, ID_NOTE };
+enum { ID_LIST = 1, ID_REFRESH, ID_ALL, ID_NONE, ID_RESTORE, ID_DELETE, ID_EMPTY, ID_INFO, ID_NOTE, ID_NOITEMS };
 }  // namespace
 
 void RecycleBinView::OnCreate() {
@@ -38,10 +39,11 @@ void RecycleBinView::OnCreate() {
         c.fmt = defs[i].fmt;
         SendMessageW(list_, LVM_INSERTCOLUMNW, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&c));
     }
-    note_ = Make(L"STATIC",
+    none_ = Make(L"STATIC", L"The Recycle Bin is empty.\nDeleted files will show up here until you restore them or empty it.", SS_CENTER | SS_NOPREFIX, ID_NOITEMS);
+    note_ = Make(L"SSInfo",
                  L"This is the Windows Recycle Bin of all drives. Tick the items you want (or highlight them), then restore them or delete "
                  L"them permanently. Permanently deleted items cannot be recovered.",
-                 SS_LEFT | SS_NOPREFIX, ID_NOTE);
+                 WS_TABSTOP, ID_NOTE);
 }
 
 void RecycleBinView::Layout(int w, int h) {
@@ -59,17 +61,36 @@ void RecycleBinView::Layout(int w, int h) {
         x += mw_->S(b.w) + mw_->S(8);
     }
     MoveWindow(info_, m, y + bh + mw_->S(8), w - 2 * m, mw_->S(26), TRUE);
-    int top = y + bh + mw_->S(40), noteH = mw_->S(50);
-    MoveWindow(list_, 0, top, w, std::max(mw_->S(100), h - top - noteH - mw_->S(12)), TRUE);
-    MoveWindow(note_, m, h - noteH - mw_->S(6), w - 2 * m, noteH, TRUE);
+    int ic = mw_->S(kInfoIconSize), top = y + bh + mw_->S(40), noteH = ic + mw_->S(12);  // the note is the tooltip of one "i" icon
+    int listH = std::max(mw_->S(100), h - top - noteH - mw_->S(4));
+    MoveWindow(list_, 0, top, w, listH, TRUE);
+    MoveWindow(none_, m, top + mw_->S(60), w - 2 * m, mw_->S(70), TRUE);
+    MoveWindow(note_, m, h - noteH + mw_->S(4), ic, ic, TRUE);
+    // columns share the width (name 28%, location 40%, size 13%, deleted 19%) so nothing is pushed off-screen
+    int avail = std::max(mw_->S(360), w - mw_->S(24));
+    const int pct[4] = {28, 40, 13, 19};
+    for (int i = 0; i < 3; ++i) ListView_SetColumnWidth(list_, i, avail * pct[i] / 100);
+    ListView_SetColumnWidth(list_, 3, LVSCW_AUTOSIZE_USEHEADER);  // the last column takes the rest: no empty header stub
 }
 
 void RecycleBinView::Refresh() {
+    // Automatic refreshes (file changes elsewhere) must not wipe the user's ticks or redraw an unchanged list.
+    std::vector<bool> wasTicked(keys_.size());
+    for (size_t i = 0; i < keys_.size(); ++i) wasTicked[i] = ListView_GetCheckState(list_, static_cast<int>(i)) != 0;
     filling_ = true;
     bin_.Reload();
+    const auto& items = bin_.items();
+    std::vector<std::wstring> keys;
+    for (const BinItem& b : items) keys.push_back(b.from + L"|" + b.name + L"|" + std::to_wstring(b.deleted));
+    if (keys == keys_ && !keys_.empty()) {
+        filling_ = false;
+        UpdateButtons();
+        return;
+    }
+    std::vector<bool> ticked = CarryTicks(keys_, wasTicked, keys);
+    keys_ = keys;
     ListView_DeleteAllItems(list_);
     uint64_t total = 0;
-    const auto& items = bin_.items();
     for (size_t i = 0; i < items.size(); ++i) {
         const BinItem& b = items[i];
         std::wstring size = b.isDir ? L"" : FormatBytes(b.size), when = FormatFileTime(b.deleted);
@@ -81,12 +102,13 @@ void RecycleBinView::Refresh() {
         ListView_SetItemText(list_, static_cast<int>(i), 1, const_cast<wchar_t*>(b.from.c_str()));
         ListView_SetItemText(list_, static_cast<int>(i), 2, size.data());
         ListView_SetItemText(list_, static_cast<int>(i), 3, when.data());
+        if (ticked[i]) ListView_SetCheckState(list_, static_cast<int>(i), TRUE);
         total += b.size;
     }
     filling_ = false;
-    SetWindowTextW(info_, (items.empty() ? std::wstring(L"The Recycle Bin is empty.")
-                                         : FormatCount(items.size()) + (items.size() == 1 ? L" item, " : L" items, ") + FormatBytes(total) + L" (folders are listed without a size).")
-                              .c_str());
+    ShowWindow(list_, items.empty() ? SW_HIDE : SW_SHOW);
+    ShowWindow(none_, items.empty() ? SW_SHOW : SW_HIDE);
+    SetWindowTextW(info_, items.empty() ? L"" : (FormatCount(items.size()) + (items.size() == 1 ? L" item, " : L" items, ") + FormatBytes(total) + L" (folders are listed without a size).").c_str());
     UpdateButtons();
 }
 
@@ -105,6 +127,7 @@ void RecycleBinView::UpdateButtons() {
     if (filling_) return;
     bool has = !bin_.items().empty(), chosen = !Chosen().empty(), idle = !working_;
     EnableWindow(bRefresh_, idle);
+    for (HWND b : {bAll_, bNone_, bRestore_, bDelete_, bEmpty_}) ShowWindow(b, has ? SW_SHOW : SW_HIDE);  // nothing to act on in an empty bin
     EnableWindow(bAll_, has && idle);
     EnableWindow(bNone_, has && idle);
     EnableWindow(bRestore_, chosen && idle);
@@ -204,6 +227,16 @@ LRESULT RecycleBinView::OnMessage(UINT m, WPARAM w, LPARAM l) {
         case WM_NOTIFY: {
             auto* nm = reinterpret_cast<NMHDR*>(l);
             if (nm->code == NM_CUSTOMDRAW && nm->hwndFrom == ListView_GetHeader(list_)) return HeaderCustomDraw(l);
+            if (nm->code == NM_CUSTOMDRAW && nm->hwndFrom == list_) {
+                auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
+                if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return CDRF_NOTIFYPOSTPAINT;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
+                    int i = static_cast<int>(cd->nmcd.dwItemSpec);
+                    DrawListTickNative(list_, cd->nmcd.hdc, i, ListView_GetCheckState(list_, i) != 0);
+                }
+                return CDRF_DODEFAULT;
+            }
             if (nm->hwndFrom == list_) {
                 if (nm->code == LVN_ITEMCHANGED) UpdateButtons();
                 else if (nm->code == LVN_KEYDOWN) {

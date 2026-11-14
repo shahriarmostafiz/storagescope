@@ -13,6 +13,42 @@ ScanNode::~ScanNode() = default;
 ScanNode::ScanNode(ScanNode&&) noexcept = default;
 ScanNode& ScanNode::operator=(ScanNode&&) noexcept = default;
 
+bool IsAppDataPath(const std::wstring& p) {
+    if (p.size() < 3 || p[1] != L':' || p[2] != L'\\') return false;
+    std::wstring rest = p.substr(3);
+    while (!rest.empty() && rest.back() == L'\\') rest.pop_back();
+    if (path::EqualsNoCase(rest, L"ProgramData")) return true;
+    size_t a = rest.find(L'\\');
+    if (a == std::wstring::npos || !path::EqualsNoCase(rest.substr(0, a), L"Users")) return false;
+    size_t b = rest.find(L'\\', a + 1);
+    if (b == std::wstring::npos || b == a + 1) return false;
+    return path::EqualsNoCase(rest.substr(b + 1), L"AppData");
+}
+
+bool IsAppDataRoot(const ScanNode* n) {
+    if (!n || n->type != NodeType::Directory || n->removed) return false;
+    if (!path::EqualsNoCase(n->name, L"AppData") && !path::EqualsNoCase(n->name, L"ProgramData")) return false;  // cheap test first
+    return IsAppDataPath(BuildPath(n));
+}
+
+void FindAppDataRoots(const ScanNode* n, std::vector<const ScanNode*>& out) {
+    if (!n || !n->dir) return;
+    for (const auto& c : n->dir->children) {
+        if (c.removed) continue;
+        if (IsAppDataRoot(&c)) out.push_back(&c);
+        else if (c.type == NodeType::Directory && (n->type == NodeType::Virtual || path::EqualsNoCase(c.name, L"Users") || path::EqualsNoCase(n->name, L"Users")))
+            FindAppDataRoots(&c, out);  // drive roots, then Users, then each profile: a few folders, never the whole tree
+    }
+}
+
+uint64_t AppDataBytes(const ScanNode* n) {
+    std::vector<const ScanNode*> roots;
+    FindAppDataRoots(n, roots);
+    uint64_t sum = 0;
+    for (const ScanNode* r : roots) sum += r->size;
+    return sum;
+}
+
 std::wstring BuildPath(const ScanNode* n) {
     std::vector<const ScanNode*> chain;
     for (const ScanNode* p = n; p; p = p->parent) {

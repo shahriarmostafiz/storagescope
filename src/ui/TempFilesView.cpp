@@ -1,6 +1,8 @@
 #include "ui/TempFilesView.h"
 
 #include <commctrl.h>
+
+#include <algorithm>
 #include <uxtheme.h>
 
 #include "ui/MainWindow.h"
@@ -26,7 +28,7 @@ void TempFilesView::OnCreate() {
         if (kAges[i] == mw_->settings().tempAgeHours) sel = i;
     SendMessageW(cbAge_, CB_SETCURSEL, static_cast<WPARAM>(sel), 0);
     bClean_ = Make(L"BUTTON", L"Clean Selected", WS_TABSTOP | BS_OWNERDRAW | WS_DISABLED, ID_CLEAN);
-    total_ = Make(L"STATIC", L"Potential space recoverable: not scanned yet", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, ID_TOTAL);
+    total_ = Make(L"STATIC", L"Recoverable space: not scanned yet", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, ID_TOTAL);
 
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
@@ -44,23 +46,47 @@ void TempFilesView::OnCreate() {
         SendMessageW(list_, LVM_INSERTCOLUMNW, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&c));
     }
     result_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_RESULT);
-    note_ = Make(L"STATIC",
+    note_ = Make(L"SSInfo",
                  L"Only user-level temp folders are listed. Cleaned files are deleted permanently (not sent to the Recycle Bin). "
                  L"Files that are in use are skipped. Windows system folders, WinSxS, drivers, browser profiles and the registry are never touched.",
-                 SS_LEFT | SS_NOPREFIX, ID_NOTE);
+                 WS_TABSTOP, ID_NOTE);
 }
 
 void TempFilesView::Layout(int w, int h) {
-    int m = mw_->S(12), y = mw_->S(10), bh = mw_->S(32);
-    MoveWindow(bScan_, m, y, mw_->S(220), bh, TRUE);
-    MoveWindow(lblAge_, m + mw_->S(240), y, mw_->S(110), bh, TRUE);
-    MoveWindow(cbAge_, m + mw_->S(354), y - mw_->S(1), mw_->S(230), mw_->S(200), TRUE);
-    MoveWindow(bClean_, m + mw_->S(604), y, mw_->S(170), bh, TRUE);
+    int m = mw_->S(12), y = mw_->S(10), bh = mw_->S(32), gap = mw_->S(10);
+    // Toolbar: the scan button, "Delete files: [age]" as one group, and Clean; wraps onto a second row in a narrow window.
+    int x = m;
+    struct It {
+        HWND h;
+        int w, dy, hh;
+    };
+    auto group = [&](std::initializer_list<It> items) {
+        int total = 0;
+        for (auto& it : items) total += mw_->S(it.w) + gap;
+        if (x + total - gap > w - m && x > m) {
+            x = m;
+            y += bh + mw_->S(8);
+        }
+        for (auto& it : items) {
+            MoveWindow(it.h, x, y + it.dy, mw_->S(it.w), it.hh, TRUE);
+            x += mw_->S(it.w) + gap;
+        }
+        x += mw_->S(10);
+    };
+    group({{bScan_, 220, 0, bh}});
+    group({{lblAge_, 100, 0, bh}, {cbAge_, 230, -mw_->S(1), mw_->S(200)}});
+    group({{bClean_, 170, 0, bh}});
     MoveWindow(total_, m, y + bh + mw_->S(8), w - 2 * m, mw_->S(26), TRUE);
     int top = y + bh + mw_->S(40);
-    MoveWindow(list_, 0, top, w, mw_->S(150), TRUE);
-    MoveWindow(result_, m, top + mw_->S(160), w - 2 * m, mw_->S(80), TRUE);
-    MoveWindow(note_, m, h - mw_->S(60), w - 2 * m, mw_->S(50), TRUE);
+    int ic = mw_->S(kInfoIconSize), noteH = ic + mw_->S(12);  // the safety note is the tooltip of one "i" icon at the bottom
+    int listH = std::max(mw_->S(150), h - top - noteH - mw_->S(76));  // the list takes the free height; the result sits under it
+    MoveWindow(list_, 0, top, w, listH, TRUE);
+    MoveWindow(result_, m, top + listH + mw_->S(8), w - 2 * m, mw_->S(56), TRUE);
+    MoveWindow(note_, m, h - noteH, ic, ic, TRUE);
+    int avail = std::max(mw_->S(500), w - mw_->S(24));  // columns share the width
+    const int pct[5] = {24, 40, 10, 14, 12};
+    for (int i = 0; i < 4; ++i) ListView_SetColumnWidth(list_, i, avail * pct[i] / 100);
+    ListView_SetColumnWidth(list_, 4, LVSCW_AUTOSIZE_USEHEADER);  // the last column takes the rest: no empty header stub
 }
 
 uint32_t TempFilesView::AgeHours() const {
@@ -99,8 +125,8 @@ void TempFilesView::FillList() {
     filling_ = false;
     bool any = false;
     for (auto& r : cats_) any = any || r.scanned;
-    SetWindowTextW(total_, any ? (L"Potential space recoverable: " + FormatBytes(total)).c_str()
-                               : (cats_.empty() ? L"No known temporary folders were found." : L"Potential space recoverable: not scanned yet"));
+    SetWindowTextW(total_, any ? (L"Recoverable space: " + FormatBytes(total)).c_str()
+                               : (cats_.empty() ? L"No known temporary folders were found." : L"Recoverable space: not scanned yet"));
     UpdateButtons();
 }
 
@@ -121,7 +147,7 @@ void TempFilesView::UpdateButtons() {
         }
     }
     EnableWindow(bClean_, idle && any);
-    if (scanned && !filling_) SetWindowTextW(total_, (L"Potential space recoverable: " + FormatBytes(total)).c_str());
+    if (scanned && !filling_) SetWindowTextW(total_, (L"Recoverable space: " + FormatBytes(total)).c_str());
 }
 
 void TempFilesView::StartScan(bool afterClean) {
@@ -197,13 +223,13 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             for (auto& r : cats_) files += r.res.files;
             uint64_t bytes = 0;
             for (auto& r : cats_) bytes += r.res.bytes;
-            std::wstring found = FormatCount(files) + L" eligible files found.";
+            std::wstring found = Plural(files, L"eligible file", L"eligible files") + L" found.";
             SetWindowTextW(result_, (cleanedNote_.empty() ? found : cleanedNote_ + L"\r\n" + found).c_str());
             if (pendingConfirm_) {  // the list behind this box is already refreshed
                 pendingConfirm_ = false;
                 mw_->ShowMessage(L"Temporary files cleaned",
-                                 confirmText_ + L"\n\nThe list has been refreshed: " + FormatCount(files) + L" eligible files (" +
-                                     FormatBytes(bytes) + L") remain.");
+                                 confirmText_ + L"\n\nThe list has been refreshed: " + Plural(files, L"eligible file", L"eligible files") + L" (" +
+                                     FormatBytes(bytes) + (files == 1 ? L") remains." : L") remain."));
             }
             return 0;
         }
@@ -215,14 +241,14 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                 std::lock_guard lk(m_);
                 r = lastClean_;
             }
-            std::wstring t = L"Cleaned:\r\n" + FormatBytes(r.cleanedBytes) + L" (" + FormatCount(r.cleanedFiles) + L" files)\r\nSkipped:\r\n" +
-                             FormatBytes(r.skippedBytes) + L" (" + FormatCount(r.skippedFiles) + L" files";
+            std::wstring t = L"Cleaned:\r\n" + FormatBytes(r.cleanedBytes) + L" (" + Plural(r.cleanedFiles, L"file", L"files") + L")\r\nSkipped:\r\n" +
+                             FormatBytes(r.skippedBytes) + L" (" + Plural(r.skippedFiles, L"file", L"files");
             if (r.inUseFiles) t += L", " + FormatCount(r.inUseFiles) + L" currently in use";
             t += L")";
             if (r.rejected) t += L"\r\nOne folder failed the safety validation and was not touched.";
             cleanedNote_ = t;
-            confirmText_ = L"Freed: " + FormatBytes(r.cleanedBytes) + L" (" + FormatCount(r.cleanedFiles) + L" files)\nSkipped: " +
-                           FormatBytes(r.skippedBytes) + L" (" + FormatCount(r.skippedFiles) + L" files" +
+            confirmText_ = L"Freed: " + FormatBytes(r.cleanedBytes) + L" (" + Plural(r.cleanedFiles, L"file", L"files") + L")\nSkipped: " +
+                           FormatBytes(r.skippedBytes) + L" (" + Plural(r.skippedFiles, L"file", L"files") +
                            (r.inUseFiles ? L", " + FormatCount(r.inUseFiles) + L" currently in use" : L"") + L")";
             if (r.rejected) confirmText_ += L"\nOne folder failed the safety validation and was not touched.";
             pendingConfirm_ = true;
@@ -234,6 +260,16 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
         case WM_NOTIFY: {
             auto* nm = reinterpret_cast<NMHDR*>(l);
             if (nm->code == NM_CUSTOMDRAW && nm->hwndFrom == ListView_GetHeader(list_)) return HeaderCustomDraw(l);
+            if (nm->code == NM_CUSTOMDRAW && nm->hwndFrom == list_) {
+                auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(l);
+                if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return CDRF_NOTIFYPOSTPAINT;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
+                    int i = static_cast<int>(cd->nmcd.dwItemSpec);
+                    DrawListTickNative(list_, cd->nmcd.hdc, i, ListView_GetCheckState(list_, i) != 0);
+                }
+                return CDRF_DODEFAULT;
+            }
             if (nm->hwndFrom == list_ && nm->code == LVN_ITEMCHANGED && !filling_) {
                 auto* v = reinterpret_cast<NMLISTVIEW*>(l);
                 if ((v->uChanged & LVIF_STATE) && ((v->uNewState ^ v->uOldState) & LVIS_STATEIMAGEMASK)) UpdateButtons();

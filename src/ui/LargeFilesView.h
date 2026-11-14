@@ -27,12 +27,14 @@ private:
 
     HWND lblSize_ = nullptr, cbSize_ = nullptr, edCustom_ = nullptr, lblMb_ = nullptr, lblType_ = nullptr, cbType_ = nullptr,
          list_ = nullptr, info_ = nullptr, empty_ = nullptr, bOpen_ = nullptr, bRecycle_ = nullptr, bPerm_ = nullptr,
-         note_ = nullptr, sortCb_ = nullptr, dirBtn_ = nullptr, bRefresh_ = nullptr, lblStale_ = nullptr, cbStale_ = nullptr, bBasket_ = nullptr;
+         note_ = nullptr, bRefresh_ = nullptr, lblStale_ = nullptr, cbStale_ = nullptr, bBasket_ = nullptr;
     void SyncSortUi();
     std::vector<ScanNode*> rows_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column
     int sortCol_ = 1;  // Size
     bool sortAsc_ = false;
+    int lastW_ = 0, lastH_ = 0;
+    bool barShown_ = false;  // the action buttons are shown only while something is selected
 };
 
 }  // namespace ss

@@ -57,6 +57,13 @@ struct ScanResult {
 std::wstring BuildPath(const ScanNode* n);     // "" for the virtual root
 std::wstring DisplayName(const ScanNode* n);   // "C:" for drive roots
 const wchar_t* StatusText(const ScanNode* n);
+// App data = "X:\ProgramData" and "X:\Users\<name>\AppData". Hidden by default (Settings > Scan > "Show app data").
+bool IsAppDataPath(const std::wstring& path);
+bool IsAppDataRoot(const ScanNode* n);  // a folder node that is one of those two
+// Bytes held by app-data folders at or below `n`. Looks only where they can be (drive roots, Users, profiles), so it is cheap.
+uint64_t AppDataBytes(const ScanNode* n);
+// The app-data folders at or below `n` (same limited search).
+void FindAppDataRoots(const ScanNode* n, std::vector<const ScanNode*>& out);
 // Marks a node removed and subtracts its totals from every ancestor.
 void DetachFromTree(ScanNode* n);
 // Detaches every directory below `root` whose full path satisfies `isMatch` (not descending into matches); returns how many.

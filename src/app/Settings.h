@@ -9,11 +9,13 @@ namespace ss {
 // System path protection is not a setting: it cannot be disabled.
 struct Settings {
     bool showHidden = true;
+    bool showAppData = false;    // list AppData / ProgramData (advanced); off = hidden everywhere, sizes still counted
     bool askBeforeRecycle = true;
     bool requireSecondPermanentConfirm = true;
     uint32_t tempAgeHours = 24;  // 24 / 168 / 720
     uint32_t workers = 0;        // 0 = auto
     uint32_t theme = 0;          // 0 = follow Windows, 1 = light, 2 = dark
+    uint32_t accent = 0;         // accent colour preset (index into the table in View.cpp; 0 = Emerald)
     std::vector<std::wstring> ignored;  // canonical folders/drives that scans skip entirely
     bool keepHistory = true;            // remember free space per drive per day (History) for the Dashboard trend
     bool rememberScan = true;           // save the last scan to disk and load it at start-up (stores file/folder names locally)

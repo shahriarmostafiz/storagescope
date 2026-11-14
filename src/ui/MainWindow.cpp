@@ -165,6 +165,7 @@ void MainWindow::MakeFonts() {
     NONCLIENTMETRICSW ncm{sizeof ncm};
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, dpi_);
     ncm.lfMessageFont.lfHeight = ncm.lfMessageFont.lfHeight * 6 / 5;  // +20%: larger, easier-to-read UI text
+    ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;                   // sharp sub-pixel text, also when painted off-screen
     HFONT f = CreateFontIndirectW(&ncm.lfMessageFont);
     LOGFONTW b = ncm.lfMessageFont;
     b.lfWeight = FW_SEMIBOLD;
@@ -197,6 +198,7 @@ bool MainWindow::OnCreate() {
     // Mica backdrop for the title bar (Windows 11 22H2+; harmlessly ignored elsewhere). The client area stays opaque.
     int backdrop = 2;  // DWMSBT_MAINWINDOW
     DwmSetWindowAttribute(hwnd_, 38 /*DWMWA_SYSTEMBACKDROP_TYPE*/, &backdrop, sizeof backdrop);
+    SetAccent(static_cast<int>(settings_.accent));
     SetDarkTheme(ResolveDark());
     nav_ = CreateWindowExW(0, L"SSNav", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, hwnd_, nullptr,
                            GetModuleHandleW(nullptr), this);
@@ -206,7 +208,7 @@ bool MainWindow::OnCreate() {
                              nullptr, nullptr, nullptr);
     prog_ = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | PBS_MARQUEE | PBS_SMOOTH, 0, 0, 10, 10, hwnd_, nullptr,
                             nullptr, nullptr);
-    stop_ = CreateWindowExW(0, L"BUTTON", L"Stop Scan", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_DISABLED | BS_OWNERDRAW, 0, 0,
+    stop_ = CreateWindowExW(0, L"BUTTON", L"Stop Scan", WS_CHILD | WS_TABSTOP | WS_DISABLED | BS_OWNERDRAW, 0, 0,
                             10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopId)), nullptr, nullptr);
     details_ = CreateWindowExW(0, L"BUTTON", L"More info", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10, hwnd_,
                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailsId)), nullptr, nullptr);
@@ -256,301 +258,22 @@ bool MainWindow::OnCreate() {
     return true;
 }
 
-// ------------------------------------------------------------------ remembered scan + automatic updates
-
-namespace {
-uint64_t NowFt() {
-    FILETIME f;
-    GetSystemTimeAsFileTime(&f);
-    return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
-}
-constexpr uint64_t kDay = 864000000000ull;  // FILETIME ticks per day
-}  // namespace
-
-std::wstring MainWindow::SnapshotPath() { return Settings::AppDataDir() + L"\\lastscan.bin"; }
-
-std::wstring MainWindow::SavedScanInfo() const {
-    WIN32_FILE_ATTRIBUTE_DATA d;
-    if (!GetFileAttributesExW(SnapshotPath().c_str(), GetFileExInfoStandard, &d)) return L"No saved scan.";
-    uint64_t sz = (static_cast<uint64_t>(d.nFileSizeHigh) << 32) | d.nFileSizeLow;
-    uint64_t ft = (static_cast<uint64_t>(d.ftLastWriteTime.dwHighDateTime) << 32) | d.ftLastWriteTime.dwLowDateTime;
-    return L"Saved scan: " + FormatBytes(sz) + L", from " + FormatFileTime(ft);
-}
-
-void MainWindow::ClearSavedScan() {
-    DeleteFileW(SnapshotPath().c_str());
-    saved_.reset();
-    cleared_ = true;  // not written again on exit; the next scan saves a new one
-    DataChanged();
-    Toast(L"Saved scan cleared");
-}
-
-void MainWindow::UpdateSummary() {
-    if (!scan_ || !scan_->root) return;
-    const ScanNode* r = scan_->root.get();
-    scan_->files = r->files;
-    scan_->dirs = r->dirs;
-    scan_->bytes = r->size;
-    std::wstring name = r->type == NodeType::Virtual ? L"All local drives" : BuildPath(r);
-    summary_ = L"Last scan: " + name + L" - " + FormatCount(r->files) + L" files, " + FormatCount(r->dirs) + L" folders, " + FormatBytes(r->size);
-    if (dataFt_) summary_ += L"  -  scanned " + FormatFileTime(dataFt_);
-    if (settings_.autoUpdate && updateFt_) summary_ += L", checked " + FormatAge(updateFt_);
-}
-
-void MainWindow::LoadSavedScan() {
-    lastRoots_ = saved_->roots;
-    dataFt_ = saved_->created;
-    summary_ = L"Saved scan from " + FormatFileTime(saved_->created) + L": " + FormatCount(saved_->files) + L" files, " +
-               FormatCount(saved_->dirs) + L" folders, " + FormatBytes(saved_->bytes);
-    SetStatus(L"Loading the saved scan from " + FormatFileTime(saved_->created) + L"...");
-    loading_ = true;
-    UpdateScanUi();
-    DataChanged();  // the Dashboard shows the saved statistics right away
-    loadThread_ = std::jthread([this](std::stop_token) {
-        auto r = LoadSnapshot(SnapshotPath());
-        {
-            std::lock_guard lk(shared_);
-            loaded_ = std::move(r);
-        }
-        PostMessageW(hwnd_, WM_APP_SNAPSHOT_LOADED, 0, 0);
-    });
-}
-
-void MainWindow::HideIgnoredInTree() {
-    if (!scan_ || settings_.ignored.empty()) return;
-    DetachMatching(scan_->root.get(), [&](const std::wstring& p) {
-        for (const auto& ig : settings_.ignored)
-            if (path::EqualsNoCase(p, ig)) return true;
-        return false;
-    });
-}
-
-void MainWindow::OnSnapshotLoaded() {
-    if (loadThread_.joinable()) loadThread_.join();
-    loading_ = false;
-    std::unique_ptr<ScanResult> r;
-    {
-        std::lock_guard lk(shared_);
-        r = std::move(loaded_);
-    }
-    if (!r) {
-        DeleteFileW(SnapshotPath().c_str());  // unreadable or from another version: scan again
-        saved_.reset();
-        summary_.clear();
-        lastRoots_.clear();
-        SetStatus(L"The saved scan could not be read and was discarded.");
-        UpdateScanUi();
-        DataChanged();
-        return;
-    }
-    uint64_t hash = saved_ ? saved_->ignoredHash : 0;
-    saved_.reset();
-    scan_ = std::move(r);
-    ++gen_;
-    if (hash != HashIgnored(settings_.ignored)) {
-        HideIgnoredInTree();
-        treeDirty_ = true;
-    }
-    updateFt_ = 0;
-    UpdateSummary();
-    UpdateScanUi();
-    DataChanged();
-    StartWatcher();
-    uint32_t today = static_cast<uint32_t>(NowFt() / kDay);
-    if (settings_.autoUpdate && settings_.lastFullScanDay && today > settings_.lastFullScanDay + 7) {
-        SetStatus(L"The saved scan is over a week old: scanning again...");
-        StartScan(lastRoots_);
-    } else if (settings_.autoUpdate) {
-        StartRecheck();
-    } else {
-        SetStatus(L"Saved scan from " + FormatFileTime(dataFt_) + L" (automatic updates are off).");
-    }
-}
-
-void MainWindow::SaveScanNow() {
-    if (!settings_.rememberScan || cleared_ || !scan_ || !treeDirty_ || scanning_) return;
-    SetStatus(L"Saving the scan...");
-    UpdateWindow(status_);
-    ScanStats st = ComputeStats(scan_->root.get(), settings_.showHidden, false, 10);
-    bool ok = SaveSnapshot(*scan_, lastRoots_, HashIgnored(settings_.ignored), st, SnapshotPath());
-    Logger::Get().Info(L"scan saved on exit: ok=%d", ok);
-    treeDirty_ = false;
-}
-
-void MainWindow::StartWatcher() {
-    watcher_.Stop();
-    if (!settings_.autoUpdate || !scan_ || lastRoots_.empty()) return;
-    std::vector<std::wstring> roots;
-    for (const auto& r : lastRoots_) {
-        std::wstring c = path::Canonicalize(r);
-        if (!c.empty()) roots.push_back(c);
-    }
-    watcher_.Start(roots, settings_.ignored, [] {});  // polled by the timer
-}
-
-void MainWindow::StartRecheck() {
-    if (!scan_ || !settings_.autoUpdate || busy()) return;
-    if (valThread_.joinable()) {
-        valThread_.request_stop();
-        valThread_.join();
-    }
-    std::vector<DirCheck> checks;
-    CollectDirChecks(scan_->root.get(), checks);
-    SetStatus(L"Checking for changes since the last scan...");
-    valThread_ = std::jthread([this, checks = std::move(checks)](std::stop_token st) {
-        auto changed = ValidateDirs(checks, 4, st);
-        if (st.stop_requested()) return;
-        {
-            std::lock_guard lk(shared_);
-            validated_ = std::move(changed);
-        }
-        PostMessageW(hwnd_, WM_APP_VALIDATED, 0, 0);
-    });
-}
-
-void MainWindow::OnValidated() {
-    if (valThread_.joinable()) valThread_.join();
-    std::vector<std::wstring> v;
-    {
-        std::lock_guard lk(shared_);
-        v = std::move(validated_);
-    }
-    updateFt_ = NowFt();
-    if (v.empty()) {
-        UpdateSummary();
-        SetStatus(L"Up to date (scan from " + FormatFileTime(dataFt_) + L").");
-        return;
-    }
-    SetStatus(FormatCount(v.size()) + L" folders changed since the last scan: updating...");
-    SyncPaths(std::move(v));
-}
-
-void MainWindow::SyncPaths(std::vector<std::wstring> paths) {
-    for (auto& p : paths) syncQueue_.push_back(std::move(p));
-    PumpSync();
-}
-
-void MainWindow::PumpSync() {
-    if (syncing_ || syncQueue_.empty() || !scan_ || busy() || syncHold_) return;
-    size_t n = std::min<size_t>(syncQueue_.size(), 200);
-    syncJob_.assign(std::make_move_iterator(syncQueue_.begin()), std::make_move_iterator(syncQueue_.begin() + static_cast<ptrdiff_t>(n)));
-    syncQueue_.erase(syncQueue_.begin(), syncQueue_.begin() + static_cast<ptrdiff_t>(n));
-    syncing_ = true;
-    syncGen_ = gen_;
-    std::vector<std::wstring> ignored;  // the scanner skips these folders, so a re-listing must too
-    for (const auto& s : settings_.ignored) {
-        std::wstring c = path::Canonicalize(s);
-        if (!c.empty()) ignored.push_back(std::move(c));
-    }
-    syncThread_ = std::jthread([this, jobs = syncJob_, ignored = std::move(ignored)](std::stop_token) {
-        std::vector<SyncResult> out;
-        std::unordered_map<std::wstring, uint32_t> cluster;  // per drive
-        for (const auto& p : jobs) {
-            std::wstring key = p.substr(0, 3);
-            auto it = cluster.find(key);
-            if (it == cluster.end()) it = cluster.emplace(key, ClusterSizeOf(p)).first;
-            SyncResult r;
-            r.path = p;
-            WIN32_FILE_ATTRIBUTE_DATA fa;
-            if (GetFileAttributesExW(path::ToExtended(p).c_str(), GetFileExInfoStandard, &fa))
-                r.modified = (static_cast<uint64_t>(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
-            r.st = ListDirectory(p, it->second, r.list);
-            RemoveIgnoredDirs(p, ignored, r.list);
-            out.push_back(std::move(r));
-        }
-        {
-            std::lock_guard lk(shared_);
-            syncOut_ = std::move(out);
-        }
-        PostMessageW(hwnd_, WM_APP_SYNC_DONE, 0, 0);
-    });
-}
-
-void MainWindow::OnSyncDone() {
-    if (syncThread_.joinable()) syncThread_.join();
-    syncing_ = false;
-    std::vector<SyncResult> out;
-    {
-        std::lock_guard lk(shared_);
-        out = std::move(syncOut_);
-    }
-    std::vector<std::wstring> paths = std::move(syncJob_);
-    if (!scan_ || syncGen_ != gen_) {  // the tree was replaced meanwhile: these listings are for the old one
-        PumpSync();
-        return;
-    }
-    if (busy() || syncHold_) {  // a delete or dialog holds node pointers: try again on a later tick
-        syncQueue_.insert(syncQueue_.begin(), paths.begin(), paths.end());
-        return;
-    }
-    ScanNode* root = scan_->root.get();
-    bool structural = false;
-    for (const auto& r : out) {
-        ScanNode* n = FindNodeByPath(root, r.path);
-        if (n && n->type == NodeType::Directory && r.st == ListStatus::Ok && NeedsStructuralChange(n, r.list)) {
-            structural = true;
-            break;
-        }
-    }
-    if (structural) DropReferences();  // child vectors get rebuilt: views must not keep node pointers (they restore their folder by path)
-    SyncStats total;
-    for (const auto& r : out) {
-        ScanNode* n = FindNodeByPath(root, r.path);  // looked up again: an earlier listing may have rebuilt this node's parent
-        if (!n || n->type != NodeType::Directory) continue;
-        SyncStats s = ApplyListing(n, r.list, r.st, r.modified);
-        total.added += s.added;
-        total.removed += s.removed;
-        total.updated += s.updated;
-        for (auto& d : s.newDirs) syncQueue_.push_back(std::move(d));
-    }
-    updateFt_ = NowFt();
-    if (total.Changed() || structural) {
-        treeDirty_ = true;
-        UpdateSummary();
-        DataChanged();
-        SetStatus(L"Auto-updated " + FormatFileTime(updateFt_));
-    }
-    PumpSync();
-}
-
-void MainWindow::OnSyncTick() {
-    if (!settings_.autoUpdate || !scan_ || busy() || syncHold_) return;
-    if (watcher_.TakeOverflow()) {  // events were lost: do not guess, compare everything with the disk
-        StartRecheck();
-        return;
-    }
-    if (syncing_) return;
-    auto dirty = watcher_.TakeDirty(100);
-    if (!dirty.empty()) SyncPaths(std::move(dirty));
-    else PumpSync();
-}
-
-void MainWindow::FirstRunScan() {
-    std::vector<std::wstring> roots;
-    for (const auto& d : DriveManager::Enumerate())
-        if (d.IsFixed() && d.ready) roots.push_back(d.root);
-    settings_.firstRunDone = true;
-    settings_.Save();
-    if (roots.empty()) return;
-    StartScan(roots);
-    if (scanning_) Toast(L"First launch: scanning all local drives once. You can stop it any time.");
-}
-
 void MainWindow::Layout() {
     RECT rc;
     GetClientRect(hwnd_, &rc);
-    int w = rc.right, h = rc.bottom, navW = S(210), hdr = S(112), pad = S(16);
+    int w = rc.right, h = rc.bottom, navW = S(210), hdr = HeaderH(), pad = S(16);
     MoveWindow(nav_, 0, 0, navW, h, TRUE);
     int stopW = S(110);
     {   // basket row (shown only while the basket holds items)
-        int bw = S(190), cw = S(90), by = S(82), bh = S(26);
+        int bw = S(190), cw = S(90), by = hdr - S(34), bh = S(26);  // basket row sits at the bottom of the header
         MoveWindow(basketText_, navW + pad, by, std::max(S(100), w - navW - 4 * pad - bw - cw), bh, TRUE);
         MoveWindow(bBasketDel_, w - pad - bw - S(8) - cw, by, bw, bh, TRUE);
         MoveWindow(bBasketClear_, w - pad - cw, by, cw, bh, TRUE);
     }
     MoveWindow(status_, navW + pad, S(12), w - navW - 3 * pad - stopW, S(22), TRUE);
     MoveWindow(prog_, navW + pad, S(42), w - navW - 3 * pad - stopW, S(8), TRUE);
-    MoveWindow(stats_, navW + pad, S(58), w - navW - 3 * pad - stopW, S(22), TRUE);
+    ShowWindow(stats_, scanning_ || GetWindowTextLengthW(stats_) ? SW_SHOW : SW_HIDE);  // an empty line would overlap the page
+    MoveWindow(stats_, navW + pad, scanning_ ? S(58) : S(40), w - navW - 3 * pad - stopW, S(22), TRUE);
     MoveWindow(stop_, w - pad - stopW, S(12), stopW, S(32), TRUE);
     MoveWindow(details_, w - pad - stopW, S(50), stopW, S(26), TRUE);
     for (auto& p : pages_)
@@ -570,6 +293,13 @@ void MainWindow::ShowPage(int idx) {
 void MainWindow::BrowseTo(ScanNode* node) {
     ShowPage(1);
     analyzer_->NavigateTo(node);
+}
+
+// The header is only as tall as what it shows: a status line, plus a progress/stats line while scanning or after a scan,
+// plus the basket row while the basket holds items.
+int MainWindow::HeaderH() const {
+    int h = scanning_ ? S(88) : GetWindowTextLengthW(stats_) ? S(72) : S(46);
+    return basket_.empty() ? h : h + S(34);
 }
 
 void MainWindow::SetStatus(const std::wstring& s) { SetWindowTextW(status_, s.c_str()); }
@@ -652,6 +382,7 @@ void MainWindow::UpdateBasketUi() {
                                         .c_str());
     for (HWND c : {basketText_, bBasketDel_, bBasketClear_}) ShowWindow(c, any ? SW_SHOW : SW_HIDE);
     EnableWindow(bBasketDel_, any && !busy());
+    if (nav_) Layout();
 }
 
 void MainWindow::AddToBasket(const std::vector<ScanNode*>& nodes) {
@@ -756,6 +487,7 @@ bool MainWindow::ResolveDark() const {
 
 void MainWindow::ApplyTheme() {
     bool dark = ResolveDark();
+    SetAccent(static_cast<int>(settings_.accent));
     SetDarkTheme(dark);
     BOOL d = dark;
     DwmSetWindowAttribute(hwnd_, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &d, sizeof d);
@@ -784,6 +516,8 @@ void MainWindow::ApplyTheme() {
                 ListView_SetTextColor(c, t.text);
                 if (HWND hdr = ListView_GetHeader(c)) SetWindowTheme(hdr, dk ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
                 SetWindowSubclass(c, ListHeaderSubclass, 1, 0);  // header custom-draw goes to the list, not to our page
+            } else if (!wcscmp(cls, L"SSInfo")) {
+                SendMessageW(c, WM_APP_INFO_THEME, 0, 0);
             } else if (!wcscmp(cls, L"SSView")) {
                 SetWindowTheme(c, dk ? L"DarkMode_Explorer" : nullptr, nullptr);  // dark scrollbar on scrolling pages
             } else if (!wcscmp(cls, L"ComboBox") || !wcscmp(cls, L"Edit") || !wcscmp(cls, L"ListBox")) {
@@ -850,9 +584,9 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
     Logger::Get().Info(L"scan start: roots=%zu", roots.size());
     unsigned fixedWorkers = settings_.workers;
     // A finished full scan is saved on the scan thread, before the tree is shared with the UI (no locking needed).
-    bool save = settings_.rememberScan && !refreshTarget_, hidden = settings_.showHidden;
+    bool save = settings_.rememberScan && !refreshTarget_, hidden = settings_.showHidden, appData = settings_.showAppData;
     uint64_t ignHash = HashIgnored(settings_.ignored);
-    scanThread_ = std::jthread([this, roots, fixedWorkers, ignored = settings_.ignored, save, hidden, ignHash](std::stop_token st) {
+    scanThread_ = std::jthread([this, roots, fixedWorkers, ignored = settings_.ignored, save, hidden, appData, ignHash](std::stop_token st) {
         DirectoryScanner ds;
         ScanOptions opt;
         opt.workers = fixedWorkers ? fixedWorkers : DriveManager::AutoWorkers(roots);
@@ -865,9 +599,9 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
             }
             PostMessageW(hwnd_, WM_APP_SCAN_PROGRESS, 0, 0);
         };
-        cb.onFinished = [this, &roots, save, hidden, ignHash](std::unique_ptr<ScanResult> r) {
+        cb.onFinished = [this, &roots, save, hidden, appData, ignHash](std::unique_ptr<ScanResult> r) {
             if (save && r && !r->canceled && r->root) {
-                ScanStats s = ComputeStats(r->root.get(), hidden, false, 10);
+                ScanStats s = ComputeStats(r->root.get(), hidden, false, 10, appData);
                 SaveSnapshot(*r, roots, ignHash, s, SnapshotPath());
             }
             {
@@ -900,6 +634,7 @@ void MainWindow::RefreshFolder(ScanNode* dir) {
 void MainWindow::UpdateScanUi() {
     bool s = scanning_;
     EnableWindow(stop_, s);
+    ShowWindow(stop_, s ? SW_SHOW : SW_HIDE);  // nothing to stop when idle
     ShowWindow(prog_, s ? SW_SHOW : SW_HIDE);
     ShowWindow(details_, s ? SW_SHOW : SW_HIDE);
     if (!s) {
@@ -910,6 +645,7 @@ void MainWindow::UpdateScanUi() {
     else SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
     for (auto& p : pages_)
         if (p) p->OnBusyChanged();
+    if (nav_) Layout();  // the header grows while scanning
 }
 
 void MainWindow::OnScanProgress() {
@@ -949,6 +685,7 @@ void MainWindow::OnScanComplete() {
         lastCanceled_ = !scan_;
         SetStatus(L"Scan canceled.");
         SetWindowTextW(stats_, stats.c_str());
+        Layout();
         FreeInBackground(std::move(r));
         UpdateScanUi();
         DataChanged();
@@ -958,10 +695,11 @@ void MainWindow::OnScanComplete() {
     std::wstring name = r->root->type == NodeType::Virtual ? L"All local drives" : BuildPath(r->root.get());
     SetStatus(L"Scan complete: " + name);
     SetWindowTextW(stats_, stats.c_str());
+    Layout();
     DropReferences();
     syncQueue_.clear();
     ++gen_;  // listings still in flight belong to the old tree
-    updateFt_ = NowFt();
+    updateFt_ = NowFileTime();
     if (target) {
         Graft(target, std::move(r));
         treeDirty_ = true;  // the saved file predates this partial refresh: saved on exit
@@ -977,7 +715,7 @@ void MainWindow::OnScanComplete() {
     dataFt_ = updateFt_;
     treeDirty_ = false;  // already saved by the scan thread
     cleared_ = false;
-    settings_.lastFullScanDay = static_cast<uint32_t>(dataFt_ / kDay);
+    settings_.lastFullScanDay = static_cast<uint32_t>(dataFt_ / kFileTimeDay);
     settings_.Save();
     UpdateSummary();
     UpdateScanUi();
@@ -1048,7 +786,7 @@ void MainWindow::DeleteItems(std::vector<ScanNode*> nodes, DeleteMode mode) {
     std::wstring head = items.size() == 1 ? L"\"" + path::Leaf(items[0].path) + L"\"" : FormatCount(items.size()) + L" items";
     std::wstring extra;
     if (warn) extra += L"\n\nWarning: this location is in AppData/ProgramData and may contain important application data.";
-    if (blocked) extra += L"\n\n" + std::to_wstring(blocked) + L" protected item(s) were excluded.";
+    if (blocked) extra += L"\n\n" + Plural(static_cast<uint64_t>(blocked), L"protected item was", L"protected items were") + L" excluded.";
 
     bool permanent = false;
     if (mode == DeleteMode::Ask) {
@@ -1056,7 +794,7 @@ void MainWindow::DeleteItems(std::vector<ScanNode*> nodes, DeleteMode mode) {
         int r = Td(hwnd_, L"Delete " + head + L"?",
                    Describe(items, total) + L"\n\nChoose how you want to remove " + (items.size() == 1 ? L"this item:" : L"these items:") + extra,
                    TD_WARNING_ICON, TDCBF_CANCEL_BUTTON, {{201, L"Continue"}}, 201,
-                   {{101, L"Move to Recycle Bin"}, {102, L"Permanently Delete"}}, 101, &radio);
+                   {{101, L"Move to Recycle Bin"}, {102, L"Delete Permanently"}}, 101, &radio);
         if (r != 201) return;
         permanent = radio == 102;
         if (permanent && settings_.requireSecondPermanentConfirm) {
@@ -1135,14 +873,16 @@ void MainWindow::OnDeleteDone() {
     for (FileOperationError e : {FileOperationError::AccessDenied, FileOperationError::FileInUse, FileOperationError::ProtectedPath,
                                  FileOperationError::DriveUnavailable, FileOperationError::Canceled, FileOperationError::Unknown}) {
         size_t n = job->result.CountOf(e);
-        if (n) failures += std::to_wstring(n) + (n == 1 ? L" item" : L" items") + L" could not be deleted because " + ErrorText(e) + L".\n";
+        if (n) failures += Plural(n, L"item", L"items") + L" could not be deleted: " + ErrorText(e) + L".\n";
     }
     std::wstring done;
     if (ok) {
         done = (job->permanent ? L"Permanently deleted " : L"Moved ") + FormatCount(ok) + (ok == 1 ? L" item (" : L" items (") +
                FormatBytes(freed) + (job->permanent ? L" freed)." : L") to the Recycle Bin. Disk space is only released when the Recycle Bin is emptied.");
     }
-    if (gone) done += (done.empty() ? L"" : L" ") + std::to_wstring(gone) + L" item(s) no longer existed and were removed from the list.";
+    if (gone)
+        done += (done.empty() ? L"" : L" ") + Plural(static_cast<uint64_t>(gone), L"item no longer existed and was", L"items no longer existed and were") +
+                L" removed from the list.";
     if (done.empty()) done = L"Nothing was deleted.";
     SetStatus(done);
     DataChanged();
@@ -1155,47 +895,6 @@ void MainWindow::OnDeleteDone() {
     if (partial) RefreshFolder(partial);   // some files of a folder were deleted, others (locked) were not
     treeDirty_ = true;
     if (settings_.autoUpdate) SyncPaths(std::move(parents));
-}
-
-int MainWindow::PruneMissing(const std::vector<ScanNode*>& nodes) {
-    int n = DetachMissing(nodes);
-    if (n) DataChanged();
-    return n;
-}
-
-void MainWindow::SyncFolder(ScanNode* dir) {
-    if (busy() || !scan_ || !dir) return;
-    SyncPaths({BuildPath(dir)});
-    Toast(L"Folder refreshed");
-}
-
-// Light "Refresh": the listed items are verified against the disk. Vanished ones are dropped, and each distinct parent
-// folder is listed once (shallow) so changed sizes and new files show up. No subtree rescan.
-void MainWindow::RefreshNodes(const std::vector<ScanNode*>& nodes) {
-    if (busy() || !scan_) return;
-    std::vector<std::wstring> parents;
-    bool capped = false;
-    {
-        std::unordered_set<std::wstring> seen;
-        for (const ScanNode* n : nodes) {
-            if (n->removed) continue;
-            std::wstring p = path::Parent(BuildPath(n));
-            if (!p.empty() && seen.insert(path::Canonicalize(p)).second) parents.push_back(std::move(p));
-            if (parents.size() >= 3000) {  // each is one directory listing
-                capped = true;
-                break;
-            }
-        }
-    }
-    // One disk call per row: fine for a few thousand rows, a visible freeze for hundreds of thousands. The folder re-listing
-    // below removes vanished files on a worker thread anyway, so big lists skip this quick pass.
-    int gone = nodes.size() <= 5000 ? PruneMissing(nodes) : 0;
-    size_t folders = parents.size();
-    SyncPaths(std::move(parents));  // vanished files, changed sizes and new files are applied when the listings arrive
-    std::wstring msg = L"Refreshing " + FormatCount(folders) + (folders == 1 ? L" folder..." : L" folders...");
-    if (gone) msg = FormatCount(static_cast<size_t>(gone)) + L" missing item(s) removed. " + msg;
-    if (capped) msg += L" (the rest is kept current by the live watcher)";
-    Toast(msg);
 }
 
 bool MainWindow::IsIgnoredPath(const std::wstring& p) const {
@@ -1217,7 +916,7 @@ void MainWindow::IgnoreListChanged() {
     }
     if (scan_ && !busy()) StartWatcher();  // new ignore list
     DataChanged();
-    Toast(settings_.ignored.empty() ? L"Ignore list is empty" : L"Ignore list updated: " + FormatCount(settings_.ignored.size()) + L" entries");
+    Toast(settings_.ignored.empty() ? L"Ignore list is empty" : L"Ignore list updated: " + Plural(settings_.ignored.size(), L"entry", L"entries"));
 }
 
 void MainWindow::Rescan() {
@@ -1258,7 +957,7 @@ LRESULT MainWindow::OnMessage(UINT m, WPARAM w, LPARAM l) {
             HDC dc = BeginPaint(hwnd_, &ps);
             RECT rc;
             GetClientRect(hwnd_, &rc);
-            RECT hdr{S(210), 0, rc.right, S(112)};
+            RECT hdr{S(210), 0, rc.right, HeaderH()};
             FillRect(dc, &hdr, PanelBrush());
             HPEN pen = CreatePen(PS_SOLID, 1, Colors().border);
             HGDIOBJ old = SelectObject(dc, pen);
@@ -1334,6 +1033,10 @@ LRESULT MainWindow::OnMessage(UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(hwnd_, m, w, l);
 }
 
+namespace {
+bool g_navKeyboard = false;  // the nav list was last used with the keyboard
+}
+
 void MainWindow::PaintNav(HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -1375,10 +1078,14 @@ void MainWindow::PaintNav(HWND h) {
         SetTextColor(mem, Colors().text);
         RECT tr{r.left + S(16), r.top, r.right, r.bottom};
         DrawTextW(mem, kNavItems[i], -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (sel && GetFocus() == h) {
+        if (sel && GetFocus() == h && g_navKeyboard) {  // focus ring only after keyboard use; a mouse click needs none
             RECT fr = r;
-            InflateRect(&fr, -1, -1);
-            DrawFocusRect(mem, &fr);
+            InflateRect(&fr, 1, 1);
+            FillRoundRectAA(mem, fr, S(6), Colors().accentSoft, Colors().accent, 1.5f);
+            SelectObject(mem, bold_);
+            RECT tr2{r.left + S(16), r.top, r.right, r.bottom};
+            SetTextColor(mem, Colors().text);
+            DrawTextW(mem, kNavItems[i], -1, &tr2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
     }
     SelectObject(mem, oldFont);
@@ -1414,6 +1121,7 @@ LRESULT CALLBACK MainWindow::NavProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             InvalidateRect(h, nullptr, FALSE);
             return 0;
         case WM_LBUTTONDOWN:
+            g_navKeyboard = false;
             if (self) {
                 int i = (GET_Y_LPARAM(l) - self->S(76)) / self->S(42);
                 if (GET_Y_LPARAM(l) >= self->S(76) && i >= 0 && i < kNavCount) self->ShowPage(i);
@@ -1421,6 +1129,8 @@ LRESULT CALLBACK MainWindow::NavProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         case WM_KEYDOWN:
+            g_navKeyboard = true;
+            InvalidateRect(h, nullptr, FALSE);
             if (self && (w == VK_UP || w == VK_DOWN)) {
                 int i = self->page_ + (w == VK_DOWN ? 1 : -1);
                 self->ShowPage(std::clamp(i, 0, kNavCount - 1));

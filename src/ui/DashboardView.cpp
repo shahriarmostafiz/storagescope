@@ -18,7 +18,7 @@
 
 namespace ss {
 namespace {
-enum { ID_SCAN = 1, ID_FOLDER, ID_ALL, ID_REFRESH, ID_NOTE, ID_BINTEXT, ID_BIN, ID_LISTF, ID_LISTX };
+enum { ID_SCAN = 1, ID_FOLDER, ID_ALL, ID_REFRESH, ID_NOTE, ID_BINTEXT, ID_BININFO, ID_APPTIP, ID_LISTF, ID_LISTX };
 
 std::wstring TrendText(int64_t delta, int age) {
     std::wstring when = age == 1 ? L"yesterday" : std::to_wstring(age) + L" days ago";
@@ -34,6 +34,10 @@ void DashboardView::OnCreate() {
     bAll_ = Make(L"BUTTON", L"Scan All Local Drives", WS_TABSTOP | BS_OWNERDRAW, ID_ALL);
     bRefresh_ = Make(L"BUTTON", L"Refresh", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);
     binText_ = Make(L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX | SS_ENDELLIPSIS, ID_BINTEXT);
+    binInfo_ = Make(L"SSInfo", L"Moving items to the Recycle Bin does not free space until it is emptied.", WS_TABSTOP, ID_BININFO);
+    appTip_ = Make(L"SSInfo", L"App data is hidden from the file lists by default and shown here for its size only. Turn on \"Show app data\" in Settings > Scan to manage it.",
+                   WS_TABSTOP, ID_APPTIP);
+    ShowWindow(appTip_, SW_HIDE);
     note_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_NOTE);
     for (int i = 0; i < 2; ++i) {
         HWND l = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, i == 0 ? ID_LISTF : ID_LISTX);
@@ -70,8 +74,9 @@ void DashboardView::Layout(int w, int h) {
         x += mw_->S(b.w) + mw_->S(12);
     }
     titleDrives_ = {m, y0 + mw_->S(44), w - m, y0 + mw_->S(80)};
-    int cw = mw_->S(370), ch = mw_->S(160), top = y0 + mw_->S(88);
+    int cw = mw_->S(340), ch = mw_->S(160), top = y0 + mw_->S(88);
     int cols = std::max(1, (w - m) / (cw + gap));
+    cw = std::min(mw_->S(520), (w - 2 * m - (cols - 1) * gap) / cols);  // stretch to fill the row
     cards_.clear();
     for (size_t i = 0; i < drives_.size(); ++i) {
         int c = static_cast<int>(i) % cols, r = static_cast<int>(i) / cols;
@@ -79,10 +84,12 @@ void DashboardView::Layout(int w, int h) {
     }
     int y = (cards_.empty() ? top : cards_.back().bottom) + gap;
 
-    MoveWindow(binText_, m, y, std::max(mw_->S(200), w - 2 * m), bh, TRUE);
+    int ic = mw_->S(kInfoIconSize);
+    MoveWindow(binInfo_, m, y + (bh - ic) / 2, ic, ic, TRUE);
+    MoveWindow(binText_, m + ic + mw_->S(8), y, std::max(mw_->S(200), w - 2 * m - ic - mw_->S(8)), bh, TRUE);
     y += mw_->S(46);
-    MoveWindow(note_, m, y, std::max(10, w - 2 * m), mw_->S(26), TRUE);
-    y += mw_->S(40);
+    MoveWindow(note_, m, y, std::max(10, w - 2 * m), mw_->S(46), TRUE);  // wraps to two lines
+    y += mw_->S(58);
 
     legend_.clear();
     if (hasStats_) {
@@ -95,6 +102,20 @@ void DashboardView::Layout(int w, int h) {
             legend_.push_back({m + (i % perRow) * itemW, y + (i / perRow) * mw_->S(26), m + (i % perRow) * itemW + itemW,
                                y + (i / perRow) * mw_->S(26) + mw_->S(26)});
         y += rows * mw_->S(26) + mw_->S(20);
+        appRows_.clear();
+        ShowWindow(appTip_, appInfo_.total > 0 ? SW_SHOW : SW_HIDE);
+        if (appInfo_.total > 0) {  // view-only app data panel: total, then the biggest app folders
+            titleApp_ = {m, y, w - m, y + mw_->S(34)};
+            MoveWindow(appTip_, m + mw_->S(262), y + (mw_->S(34) - ic) / 2, ic, ic, TRUE);  // the "turn it on in Settings" hint is this icon's tooltip
+            y += mw_->S(38);
+            noteApp_ = {m, y, w - m, y + mw_->S(26)};
+            y += mw_->S(32);
+            for (size_t i = 0; i < appInfo_.top.size(); ++i) {
+                appRows_.push_back({m, y, w - m, y + mw_->S(26)});
+                y += mw_->S(28);
+            }
+            y += mw_->S(16);
+        }
         bool two = w >= mw_->S(900);
         int colW = two ? (w - 3 * m) / 2 : w - 2 * m, lh = mw_->S(300);
         titleFolders_ = {m, y, m + colW, y + mw_->S(34)};
@@ -111,6 +132,14 @@ void DashboardView::Layout(int w, int h) {
             y += mw_->S(38) + lh + mw_->S(16);
         }
     }
+    if (hasStats_) {  // list columns share the list width
+        int colW2 = (w >= mw_->S(900) ? (w - 3 * m) / 2 : w - 2 * m) - mw_->S(24);
+        for (HWND l : {listFolders_, listFiles_}) {
+            ListView_SetColumnWidth(l, 0, colW2 * 32 / 100);
+            ListView_SetColumnWidth(l, 1, colW2 * 14 / 100);
+            ListView_SetColumnWidth(l, 2, LVSCW_AUTOSIZE_USEHEADER);  // the last column takes the rest: no empty header stub
+        }
+    }
     ShowWindow(listFolders_, hasStats_ ? SW_SHOW : SW_HIDE);
     ShowWindow(listFiles_, hasStats_ ? SW_SHOW : SW_HIDE);
     EndLayout(y);
@@ -123,6 +152,7 @@ void DashboardView::Reload() {
 
 void DashboardView::DropReferences() {
     stats_ = ScanStats{};
+    appInfo_ = AppDataInfo{};
     folderNodes_.clear();
     fileNodes_.clear();
     ListView_DeleteAllItems(listFolders_);
@@ -138,14 +168,14 @@ void DashboardView::QueryRecycleBin() {
         binBytes_ = static_cast<uint64_t>(info.i64Size);
         binItems_ = static_cast<uint64_t>(info.i64NumItems);
     }
-    std::wstring t = L"Recycle Bin: " + FormatBytes(binBytes_) + L" in " + FormatCount(binItems_) +
-                     (binItems_ == 1 ? L" item." : L" items.") + L" Moving items there does not free space until it is emptied.";
+    std::wstring t = L"Recycle Bin: " + FormatBytes(binBytes_) + L" in " + Plural(binItems_, L"item", L"items");
     SetWindowTextW(binText_, t.c_str());
 }
 
 void DashboardView::RefreshStats() {
     ScanResult* sc = mw_->scan();
     stats_ = ScanStats{};
+    appInfo_ = AppDataInfo{};
     folderNodes_.clear();
     fileNodes_.clear();
     ListView_DeleteAllItems(listFolders_);
@@ -164,7 +194,8 @@ void DashboardView::RefreshStats() {
     };
     if (sc) {
         const Settings& s = mw_->settings();
-        stats_ = ComputeStats(sc->root.get(), s.showHidden, false, 10);  // one pass over the in-memory index
+        stats_ = ComputeStats(sc->root.get(), s.showHidden, false, 10, s.showAppData);  // one pass over the in-memory index
+        if (!s.showAppData) appInfo_ = ComputeAppData(sc->root.get());
         auto fill = [&](HWND list, const std::vector<TopItem>& items, std::vector<ScanNode*>& nodes) {
             for (size_t i = 0; i < items.size(); ++i) {
                 ScanNode* n = items[i].node;
@@ -191,7 +222,11 @@ void DashboardView::RefreshStats() {
     // legend order: largest category first
     legendCat_.resize(kCategoryCount);
     std::iota(legendCat_.begin(), legendCat_.end(), 0);
-    std::sort(legendCat_.begin(), legendCat_.end(), [&](int a, int b) { return stats_.bytes[a] > stats_.bytes[b]; });
+    const int other = static_cast<int>(FileCategory::Other);
+    std::sort(legendCat_.begin(), legendCat_.end(), [&](int a, int b) {
+        if ((a == other) != (b == other)) return b == other;  // "Other" never comes first
+        return stats_.bytes[a] > stats_.bytes[b];
+    });
 }
 
 void DashboardView::Refresh() {
@@ -217,8 +252,9 @@ void DashboardView::Refresh() {
         RefreshStats();
         dirty_ = false;
     }
-    SetWindowTextW(note_, mw_->LastScanSummary().empty() ? L"No scan has been performed. Choose a drive and press \"Scan Selected Drive\"."
-                                                         : mw_->LastScanSummary().c_str());
+    std::wstring note = mw_->LastScanSummary().empty() ? L"No scan has been performed. Choose a drive and press \"Scan Selected Drive\"."
+                                                       : mw_->LastScanSummary();
+    SetWindowTextW(note_, note.c_str());
     RECT rc;
     GetClientRect(hwnd_, &rc);
     Layout(rc.right, rc.bottom);
@@ -305,6 +341,13 @@ void DashboardView::Paint() {
         DrawTextW(mem, t, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     };
     title(titleDrives_, L"Drives");
+    {   // hint: the cards are selectable (the scan button works on the selected one)
+        SelectObject(mem, mw_->font());
+        SetTextColor(mem, c.muted);
+        RECT hr = titleDrives_;
+        hr.left += mw_->S(96);
+        DrawTextW(mem, L"Click a drive to select it", -1, &hr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
 
     int pad = mw_->S(14);
     for (size_t i = 0; i < drives_.size() && i < cards_.size(); ++i) {
@@ -324,12 +367,12 @@ void DashboardView::Paint() {
         GradientFill(mem, tv, 2, &gr, 1, GRADIENT_FILL_RECT_V);
         SelectClipRgn(mem, nullptr);
         DeleteObject(rg);
-        HPEN pen = CreatePen(PS_SOLID, sel ? mw_->S(2) : 1, sel ? c.accent : c.cardBorder);
-        HGDIOBJ op = SelectObject(mem, pen), obr = SelectObject(mem, GetStockObject(NULL_BRUSH));
-        RoundRect(mem, r.left, r.top, r.right, r.bottom, rad, rad);
-        SelectObject(mem, op);
-        SelectObject(mem, obr);
-        DeleteObject(pen);
+        {   // smooth rounded outline over the gradient (fill = the card's own colour at the corners)
+            RECT o = r;
+            float bw = static_cast<float>(sel ? mw_->S(2) : 1);
+            InflateRect(&o, 1, 1);
+            StrokeRoundRectAA(mem, o, rad / 2, sel ? c.accent : c.cardBorder, bw);
+        }
         HPEN hi = CreatePen(PS_SOLID, 1, c.dark ? RGB(88, 94, 108) : RGB(255, 255, 255));  // top highlight
         HGDIOBJ oh = SelectObject(mem, hi);
         MoveToEx(mem, r.left + rad / 2, r.top + 1, nullptr);
@@ -352,15 +395,11 @@ void DashboardView::Paint() {
 
         if (d.ready && d.total) {
             RECT bar{r.left + pad, l2.bottom + mw_->S(8), r.right - pad, l2.bottom + mw_->S(8) + mw_->S(10)};
-            HBRUSH bb = CreateSolidBrush(c.barBg);
-            FillRect(mem, &bar, bb);
-            DeleteObject(bb);
+            FillRoundRectAA(mem, bar, (bar.bottom - bar.top) / 2, c.barBg);
             double frac = static_cast<double>(d.Used()) / static_cast<double>(d.total);
             RECT fill = bar;
-            fill.right = bar.left + static_cast<LONG>((bar.right - bar.left) * frac);
-            HBRUSH fb = CreateSolidBrush(frac > 0.9 ? c.danger : c.accent);
-            FillRect(mem, &fill, fb);
-            DeleteObject(fb);
+            fill.right = bar.left + std::max<LONG>(bar.bottom - bar.top, static_cast<LONG>((bar.right - bar.left) * frac));
+            FillRoundRectAA(mem, fill, (fill.bottom - fill.top) / 2, frac > 0.9 ? c.danger : c.accent);
             std::wstring t = L"Used: " + FormatBytes(d.Used()) + L"   Free: " + FormatBytes(d.free) + L"   Total: " + FormatBytes(d.total);
             SetTextColor(mem, c.text);
             RECT l3{r.left + pad, bar.bottom + mw_->S(8), r.right - pad, bar.bottom + mw_->S(8) + mw_->S(24)};
@@ -374,14 +413,14 @@ void DashboardView::Paint() {
         } else {
             SetTextColor(mem, d.type == DRIVE_REMOTE ? c.muted : c.danger);
             RECT l3{r.left + pad, l2.bottom + mw_->S(10), r.right - pad, r.bottom};
-            DrawTextW(mem, d.type == DRIVE_REMOTE ? L"Network drive: size not queried" : L"Not ready / unavailable", -1, &l3,
+            DrawTextW(mem, d.type == DRIVE_REMOTE ? L"Network drive: size not queried" : L"Not ready or unavailable", -1, &l3,
                       DT_LEFT | DT_SINGLELINE);
         }
     }
 
     if (hasStats_) {
         title(titleTypes_, L"Usage by file type");
-        title(titleFolders_, L"Biggest folders (by the files directly inside)");
+        title(titleFolders_, L"Biggest folders");
         title(titleFiles_, L"Biggest files");
         uint64_t total = stats_.TotalBytes();
         if (total > 0) {
@@ -418,6 +457,33 @@ void DashboardView::Paint() {
             SetTextColor(mem, c.text);
             RECT tr{r.left + mw_->S(22), r.top, r.right, r.bottom};
             DrawTextW(mem, t.c_str(), -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+        if (appInfo_.total > 0 && !appRows_.empty()) {  // hidden app data: view only (no selection, no buttons)
+            title(titleApp_, L"App data (view only)");
+            SelectObject(mem, mw_->font());
+            SetTextColor(mem, c.muted);
+            std::wstring n = FormatBytes(appInfo_.total) + L" is held by your apps (AppData and ProgramData).";
+            DrawTextW(mem, n.c_str(), -1, &noteApp_, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            uint64_t biggest = appInfo_.top.empty() ? 1 : std::max<uint64_t>(1, appInfo_.top.front().size);
+            for (size_t i = 0; i < appInfo_.top.size() && i < appRows_.size(); ++i) {
+                const AppDataItem& it = appInfo_.top[i];
+                RECT r = appRows_[i];
+                int nameW = std::min<int>(mw_->S(280), (r.right - r.left) / 3), sizeW = mw_->S(90);
+                RECT nr{r.left, r.top, r.left + nameW, r.bottom};
+                SetTextColor(mem, c.text);
+                DrawTextW(mem, it.label.c_str(), -1, &nr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                RECT track{r.left + nameW + mw_->S(10), r.top + mw_->S(8), r.right - sizeW - mw_->S(10), r.top + mw_->S(18)};
+                if (track.right > track.left) {
+                    FillRoundRectAA(mem, track, mw_->S(5), c.barBg);
+                    RECT fill = track;
+                    fill.right = track.left + std::max<LONG>(mw_->S(10), static_cast<LONG>((track.right - track.left) * static_cast<double>(it.size) / static_cast<double>(biggest)));
+                    FillRoundRectAA(mem, fill, mw_->S(5), c.disabled);  // neutral grey: not an action colour
+                }
+                RECT sr{r.right - sizeW, r.top, r.right, r.bottom};
+                SetTextColor(mem, c.muted);
+                std::wstring sz = FormatBytes(it.size);
+                DrawTextW(mem, sz.c_str(), -1, &sr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            }
         }
     }
     BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);

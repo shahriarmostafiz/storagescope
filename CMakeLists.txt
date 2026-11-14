@@ -12,7 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 set(SS_COMPILE_DEFS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
-set(SS_SYS_LIBS user32 gdi32 comctl32 shell32 ole32 uuid advapi32 shlwapi uxtheme dwmapi msimg32 oleacc oleaut32 uiautomationcore cabinet)
+set(SS_SYS_LIBS user32 gdi32 comctl32 shell32 ole32 uuid advapi32 shlwapi uxtheme dwmapi msimg32 oleacc oleaut32 uiautomationcore cabinet gdiplus)
 
 # Everything that has no UI: scanner, safety rules, file operations, temp cleanup, utils.
 add_library(storagescope_core STATIC
@@ -44,13 +44,16 @@ add_executable(StorageScope WIN32
   resources/app.rc
   src/main.cpp
   src/ui/MainWindow.cpp
+  src/ui/MainWindowSession.cpp
   src/ui/View.cpp
   src/ui/DashboardView.cpp
   src/ui/AnalyzerView.cpp
   src/ui/LargeFilesView.cpp
   src/ui/TempFilesView.cpp
   src/ui/SettingsView.cpp
-  src/ui/TreemapView.cpp)
+  src/ui/TreemapView.cpp
+  src/ui/RecycleBinView.cpp
+  src/ui/Gfx.cpp)
 target_link_libraries(StorageScope PRIVATE storagescope_core)
 # Manifest: asInvoker, PerMonitorV2 DPI, long paths, Common Controls v6.
 target_link_options(StorageScope PRIVATE

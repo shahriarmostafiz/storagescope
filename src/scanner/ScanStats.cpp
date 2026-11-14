@@ -34,7 +34,32 @@ std::vector<TopItem> Drain(TopHeap& h) {
 
 }  // namespace
 
-ScanStats ComputeStats(ScanNode* root, bool includeHidden, bool includeSystem, size_t topN) {
+AppDataInfo ComputeAppData(const ScanNode* root, size_t topN) {
+    AppDataInfo info;
+    std::vector<const ScanNode*> roots;
+    FindAppDataRoots(root, roots);
+    auto addFolders = [&](const ScanNode* parent, const wchar_t* where) {
+        if (!parent->dir) return;
+        for (const auto& c : parent->dir->children)
+            if (!c.removed && c.type == NodeType::Directory && c.size >= (1ull << 20)) info.top.push_back({&c, c.size, c.name + L" (" + where + L")"});
+    };
+    for (const ScanNode* r : roots) {
+        info.total += r->size;
+        if (_wcsicmp(r->name.c_str(), L"ProgramData") == 0) {
+            addFolders(r, L"ProgramData");
+        } else if (r->dir) {  // "AppData": the apps live one level down
+            for (const auto& c : r->dir->children) {
+                if (c.removed || c.type != NodeType::Directory) continue;
+                if (c.name == L"Local" || c.name == L"Roaming" || c.name == L"LocalLow") addFolders(&c, c.name.c_str());
+            }
+        }
+    }
+    std::sort(info.top.begin(), info.top.end(), [](const AppDataItem& a, const AppDataItem& b) { return a.size > b.size; });
+    if (info.top.size() > topN) info.top.resize(topN);
+    return info;
+}
+
+ScanStats ComputeStats(ScanNode* root, bool includeHidden, bool includeSystem, size_t topN, bool includeAppData) {
     ScanStats st;
     TopHeap folders, files;
     std::vector<ScanNode*> stack{root};
@@ -48,6 +73,7 @@ ScanStats ComputeStats(ScanNode* root, bool includeHidden, bool includeSystem, s
             if (!includeHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
             if (!includeSystem && (c.attrs & FILE_ATTRIBUTE_SYSTEM)) continue;
             if (c.type == NodeType::Directory) {
+                if (!includeAppData && IsAppDataRoot(&c)) continue;
                 stack.push_back(&c);
             } else if (c.type == NodeType::File) {
                 int cat = static_cast<int>(Categorize(c.name));

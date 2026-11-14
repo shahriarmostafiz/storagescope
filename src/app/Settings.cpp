@@ -102,6 +102,7 @@ void Settings::Load() {
         if (x >= lo && x <= hi) v = static_cast<uint32_t>(x);
     };
     b("showHidden", showHidden);
+    b("showAppData", showAppData);
     b("askBeforeRecycle", askBeforeRecycle);
     b("requireSecondPermanentConfirm", requireSecondPermanentConfirm);
     b("keepHistory", keepHistory);
@@ -124,6 +125,7 @@ void Settings::Load() {
     u("tempAgeHours", tempAgeHours, 24, 720);
     u("workers", workers, 0, 16);
     u("theme", theme, 0, 2);
+    u("accent", accent, 0, 255);  // the UI clamps to the presets it has (SetAccent), so adding a preset needs no change here
     if (tempAgeHours != 24 && tempAgeHours != 168 && tempAgeHours != 720) tempAgeHours = 24;
 
     std::string ig;  // "path|path|..." ('|' cannot occur in a Windows path)
@@ -144,10 +146,10 @@ void Settings::Load() {
 void Settings::Save() const {
     char buf[512];
     sprintf_s(buf,
-              "{\n  \"showHidden\": %s,\n  \"askBeforeRecycle\": %s,\n"
-              "  \"requireSecondPermanentConfirm\": %s,\n  \"tempAgeHours\": %u,\n  \"workers\": %u,\n  \"theme\": %u,\n",
-              showHidden ? "true" : "false", askBeforeRecycle ? "true" : "false",
-              requireSecondPermanentConfirm ? "true" : "false", tempAgeHours, workers, theme);
+              "{\n  \"showHidden\": %s,\n  \"showAppData\": %s,\n  \"askBeforeRecycle\": %s,\n"
+              "  \"requireSecondPermanentConfirm\": %s,\n  \"tempAgeHours\": %u,\n  \"workers\": %u,\n  \"theme\": %u,\n  \"accent\": %u,\n",
+              showHidden ? "true" : "false", showAppData ? "true" : "false", askBeforeRecycle ? "true" : "false",
+              requireSecondPermanentConfirm ? "true" : "false", tempAgeHours, workers, theme, accent);
     std::wstring joined;
     for (const auto& p : ignored) joined += (joined.empty() ? L"" : L"|") + p;
     std::string esc;

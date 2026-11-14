@@ -31,9 +31,10 @@ private:
     void OnJobDone();
 
     HWND list_ = nullptr, info_ = nullptr, bRefresh_ = nullptr, bAll_ = nullptr, bNone_ = nullptr, bRestore_ = nullptr, bDelete_ = nullptr,
-         bEmpty_ = nullptr, note_ = nullptr;
+         bEmpty_ = nullptr, note_ = nullptr, none_ = nullptr;
     RecycleBin bin_;
     bool filling_ = false, working_ = false;
+    std::vector<std::wstring> keys_;  // identity (folder|name|deleted time) of each listed row, to keep ticks across refreshes
     std::jthread worker_;
     Job doneJob_ = Job::Restore;  // result of the finished job (written by the worker before it posts WM_APP_BIN_DONE)
     size_t doneCount_ = 0;

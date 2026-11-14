@@ -45,10 +45,11 @@ private:
     std::vector<ScanNode*> Selected() const;
     bool Visible(const ScanNode* n) const;
 
-    HWND list_ = nullptr, up_ = nullptr, search_ = nullptr, bOpen_ = nullptr, bManage_ = nullptr, bDelete_ = nullptr,
+    HWND list_ = nullptr, up_ = nullptr, search_ = nullptr, bOpen_ = nullptr, bManage_ = nullptr,
          bRecycle_ = nullptr, bPerm_ = nullptr, bBasket_ = nullptr, bRefresh_ = nullptr, bApps_ = nullptr, status_ = nullptr, empty_ = nullptr,
-         bScan_ = nullptr, sortCb_ = nullptr, dirBtn_ = nullptr;
-    int crumbRight_ = 0;
+         bScan_ = nullptr, infoIcon_ = nullptr;
+    int crumbRight_ = 0, lastW_ = 0, lastH_ = 0;
+    bool barShown_ = false, canDelete_ = false;  // action buttons are shown only while something is selected
     ScanNode* cur_ = nullptr;
     std::wstring keepPath_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column (together with highlighted rows when none is ticked)

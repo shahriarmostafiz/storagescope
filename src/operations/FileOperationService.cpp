@@ -35,12 +35,12 @@ const wchar_t* ErrorText(FileOperationError e) {
     switch (e) {
         case FileOperationError::None: return L"succeeded";
         case FileOperationError::AccessDenied: return L"access was denied";
-        case FileOperationError::FileInUse: return L"they are currently in use";
-        case FileOperationError::PathNotFound: return L"they no longer exist";
-        case FileOperationError::ProtectedPath: return L"they are protected by Windows or by StorageScope's safety rules";
+        case FileOperationError::FileInUse: return L"the files are currently in use";
+        case FileOperationError::PathNotFound: return L"the files no longer exist";
+        case FileOperationError::ProtectedPath: return L"the items are protected by Windows or by StorageScope's safety rules";
         case FileOperationError::DriveUnavailable: return L"the drive is not available";
         case FileOperationError::Canceled: return L"the operation was canceled";
-        default: return L"of an unexpected error (see the log)";
+        default: return L"an unexpected error occurred (see the log)";
     }
 }
 

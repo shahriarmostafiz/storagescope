@@ -39,13 +39,16 @@ private:
     std::vector<Trend> trends_;
     std::vector<RECT> cards_;
     int sel_ = -1;
-    HWND bScan_ = nullptr, bFolder_ = nullptr, bAll_ = nullptr, bRefresh_ = nullptr, note_ = nullptr, binText_ = nullptr,
+    HWND bScan_ = nullptr, bFolder_ = nullptr, bAll_ = nullptr, bRefresh_ = nullptr, note_ = nullptr, binText_ = nullptr, binInfo_ = nullptr, appTip_ = nullptr,
          listFolders_ = nullptr, listFiles_ = nullptr;
     uint64_t binBytes_ = 0, binItems_ = 0;
 
     bool dirty_ = true;      // stats need recomputing when the page is next shown
     bool hasStats_ = false;  // a scan exists: show the statistics sections
     ScanStats stats_;
+    AppDataInfo appInfo_;  // hidden app data, shown view-only (empty when "Show app data" is on or nothing is loaded)
+    RECT titleApp_{}, noteApp_{};
+    std::vector<RECT> appRows_;
     std::vector<ScanNode*> folderNodes_, fileNodes_;
     // layout results (client coordinates, scroll already applied)
     RECT titleDrives_{}, titleTypes_{}, barRect_{}, titleFolders_{}, titleFiles_{};

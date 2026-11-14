@@ -27,6 +27,7 @@
 #include "safety/PathProtectionService.h"
 #include "scanner/DirectoryScanner.h"
 #include "utils/FormatUtils.h"
+#include "utils/ListState.h"
 
 using namespace ss;
 
@@ -368,6 +369,8 @@ static void TestIgnoreAndSettings(const std::wstring& base) {
     SetEnvironmentVariableW(L"LOCALAPPDATA", fake.c_str());
     Settings s;
     s.theme = 2;
+    s.accent = 3;
+    s.showAppData = true;
     s.workers = 4;
     s.ignored = {L"D:\\", root + L"\\a,b", root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e"};
     s.Save();
@@ -375,8 +378,66 @@ static void TestIgnoreAndSettings(const std::wstring& base) {
     t.Load();
     SetEnvironmentVariableW(L"LOCALAPPDATA", oldVal);
     CHECK(t.theme == 2 && t.workers == 4 );
+    CHECK(t.accent == 3);  // accent colour preset survives a save/load
+    CHECK(t.showAppData && !Settings{}.showAppData);  // app data is hidden by default and the choice is saved
+    CHECK(IsAppDataPath(L"C:\\ProgramData") && IsAppDataPath(L"c:\\users\\Ann Lee\\appdata") && IsAppDataPath(L"D:\\Users\\x\\AppData\\"));
+    CHECK(!IsAppDataPath(L"C:\\Users\\x\\AppData\\Local") && !IsAppDataPath(L"C:\\Users\\x") && !IsAppDataPath(L"C:\\Users\\AppData") &&
+          !IsAppDataPath(L"C:\\Program Files\\ProgramData") && !IsAppDataPath(L"C:\\Users\\x\\Documents\\AppData") && !IsAppDataPath(L"ProgramData"));
     CHECK(t.ignored.size() == 3 && t.ignored[0] == L"D:\\" && t.ignored[1] == root + L"\\a,b" &&
           t.ignored[2] == root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e");
+}
+
+// A hand-built tree (no disk): C:\ { ProgramData\Acme, Users\x\AppData\{Local\Docker, Roaming\Zoom}, Games\AppData }.
+static ScanNode* AddNode(ScanNode* parent, const wchar_t* name, NodeType t, uint64_t size) {
+    if (parent->dir->children.capacity() < 8) parent->dir->children.reserve(8);  // keep child addresses (and their parent pointers) stable
+    ScanNode c;
+    c.name = name;
+    c.type = t;
+    c.size = size;
+    c.parent = parent;
+    if (t == NodeType::Directory) c.dir = std::make_unique<DirData>();
+    parent->dir->children.push_back(std::move(c));
+    return &parent->dir->children.back();
+}
+
+static void TestUiHelpers() {
+    SECTION("UI helpers: plurals, ticks kept across a refresh");
+    CHECK(Plural(1, L"item", L"items") == L"1 item" && Plural(2, L"item", L"items") == L"2 items" &&
+          Plural(0, L"item", L"items") == L"0 items" && Plural(1204, L"file", L"files") == L"1,204 files");
+    // rows a, b, c with b ticked; after a refresh: a gone, b still there, d new  ->  b stays ticked, d starts unticked
+    std::vector<bool> kept = CarryTicks({L"a", L"b", L"c"}, {false, true, false}, {L"b", L"c", L"d"});
+    CHECK(kept.size() == 3 && kept[0] && !kept[1] && !kept[2]);
+    CHECK(CarryTicks({}, {}, {L"x"}) == std::vector<bool>{false});
+    CHECK(CarryTicks({L"a"}, {true}, {}).empty());  // nothing left: nothing to tick
+}
+
+static void TestAppData() {
+    SECTION("App data: hidden folders, view-only summary");
+    const uint64_t MB = 1ull << 20;
+    ScanNode root;
+    root.name = L"C:\\";
+    root.type = NodeType::Directory;
+    root.scanRoot = true;
+    root.dir = std::make_unique<DirData>();
+    ScanNode* pd = AddNode(&root, L"ProgramData", NodeType::Directory, 3 * MB);
+    AddNode(AddNode(pd, L"Acme", NodeType::Directory, 3 * MB), L"a.bin", NodeType::File, 3 * MB);
+    ScanNode* app = AddNode(AddNode(AddNode(&root, L"Users", NodeType::Directory, 7 * MB), L"x", NodeType::Directory, 7 * MB), L"AppData", NodeType::Directory, 7 * MB);
+    AddNode(AddNode(AddNode(app, L"Local", NodeType::Directory, 5 * MB), L"Docker", NodeType::Directory, 5 * MB), L"big.bin", NodeType::File, 5 * MB);
+    AddNode(AddNode(AddNode(app, L"Roaming", NodeType::Directory, 2 * MB), L"Zoom", NodeType::Directory, 2 * MB), L"z.bin", NodeType::File, 2 * MB);
+    ScanNode* games = AddNode(&root, L"Games", NodeType::Directory, 2 * MB);
+    AddNode(games, L"a.bin", NodeType::File, MB);
+    AddNode(AddNode(games, L"AppData", NodeType::Directory, MB), L"f.bin", NodeType::File, MB);  // not a real app-data folder: stays visible
+    CHECK(IsAppDataRoot(app) && IsAppDataRoot(pd));
+    CHECK(!IsAppDataRoot(&games->dir->children[1]) && !IsAppDataRoot(games));
+    CHECK(AppDataBytes(&root) == 10 * MB);
+    AppDataInfo info = ComputeAppData(&root, 5);
+    CHECK(info.total == 10 * MB && info.top.size() == 3);
+    CHECK(info.top[0].label == L"Docker (Local)" && info.top[0].size == 5 * MB && info.top[1].label == L"Acme (ProgramData)" &&
+          info.top[2].label == L"Zoom (Roaming)");
+    CHECK(ComputeAppData(&root, 1).top.size() == 1);
+    // statistics: app data is left out unless asked for
+    CHECK(ComputeStats(&root, true, true, 3, false).TotalBytes() == 2 * MB);
+    CHECK(ComputeStats(&root, true, true, 3, true).TotalBytes() == 12 * MB);
 }
 
 static void TestTreeEdits(const std::wstring& base) {
@@ -954,6 +1015,8 @@ int main() {
     TestReplaceSubtree(base);
     TestIgnoreAndSettings(base);
     TestTreeEdits(base);
+    TestAppData();
+    TestUiHelpers();
     TestTempIgnore(base);
     TestStatsAndHistory(base);
     TestSnapshot(base);
