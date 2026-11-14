@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StorageScope - See what fills your disk. Clean it safely.</title>
+<meta name="description" content="StorageScope is a free, open source disk space analyzer and safe file cleaner for Windows. One small portable exe, no installer, no telemetry.">
+<link rel="icon" href="favicon.ico">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#/"><img src="favicon.ico" alt="" width="24" height="24">StorageScope</a>
+    <nav aria-label="Main">
+      <a href="#/" data-route="home">Home</a>
+      <a href="#/features" data-route="features">Features</a>
+      <a href="#/download" data-route="download">Download</a>
+      <a href="https://github.com/shahriarmostafiz/storagescope">GitHub</a>
+      <button id="theme" class="icon-btn" type="button" aria-label="Switch between light and dark theme" title="Switch theme">&#9680;</button>
+    </nav>
+  </div>
+</header>
+
+<main id="top" tabindex="-1">
+
+<div class="page" id="page-home" data-title="StorageScope - See what fills your disk. Clean it safely.">
+<section class="hero wrap">
+  <div class="hero-text">
+    <p class="eyebrow">Free and open source for Windows</p>
+    <h1>See what fills your disk.<br>Clean it safely.</h1>
+    <p class="lead">A small, private disk analyzer for Windows. No installer, no telemetry.</p>
+    <div class="cta">
+      <a id="dl-main" class="btn primary" href="https://github.com/shahriarmostafiz/storagescope/releases/latest">Download for Windows</a>
+      <a class="link" href="#/features">See features &rarr;</a>
+    </div>
+    <p id="dl-meta" class="meta">Windows 10 and 11, 64-bit. One portable exe, under 1 MB.</p>
+  </div>
+  <div class="hero-shot">
+    <img class="zoom only-light" tabindex="0" role="button" src="img/treemap-light.png" alt="StorageScope treemap showing the C: drive as colored folder cards with sizes" width="1550" height="660">
+    <img class="zoom only-dark" tabindex="0" role="button" src="img/treemap-dark.png" alt="StorageScope treemap in dark mode" width="1550" height="660">
+  </div>
+</section>
+
+<section id="download" class="download wrap">
+  <h2>Download</h2>
+  <div class="dl-box">
+    <div class="dl-info">
+      <label id="ver-label" class="meta" for="ver">Version</label>
+      <select id="ver" disabled><option>Loading releases...</option></select>
+      <p class="dl-ver" id="dl-ver">Latest release</p>
+      <p class="meta" id="dl-info">Windows 10 and 11, 64-bit. Portable: no installer, nothing to uninstall.</p>
+      <p class="meta mono" id="dl-sha" hidden></p>
+      <p class="meta" id="dl-notes" hidden></p>
+      <p class="meta" id="dl-old" hidden></p>
+    </div>
+    <a id="dl-main2" class="btn primary big" href="https://github.com/shahriarmostafiz/storagescope/releases/latest">Download</a>
+  </div>
+  <p class="meta"><a href="https://github.com/shahriarmostafiz/storagescope/releases">All releases on GitHub</a></p>
+</section>
+
+</div>
+
+<div class="page" id="page-features" data-title="Features - StorageScope" hidden>
+<section class="page-head wrap">
+  <p class="eyebrow">Features</p>
+  <h1>Everything you need to find and clear space</h1>
+  <p class="lead">Five views, one small exe. Scan once, then explore it the way that suits the question.</p>
+</section>
+<section id="treemap" class="spot wrap">
+  <div class="spot-text">
+    <p class="eyebrow">The main feature</p>
+    <h2>A treemap you can actually read</h2>
+    <p>Most disk tools draw a wall of nested rectangles. StorageScope shows each folder as a card: the biggest items first, a bar for its share of the parent, and one color per drive and file type.</p>
+    <ul class="ticks">
+      <li><b>Drill in with a double-click</b> and go back with Up. Open any card in the Storage Analyzer for a detailed list.</li>
+      <li><b>Colors that mean something:</b> every drive has its own color, and a legend maps file types to colors.</li>
+      <li><b>Hover for details</b> and add items to a basket to review before you delete anything.</li>
+      <li><b>App data is view-only.</b> AppData and ProgramData show as a locked grey card so you can see the space they use without touching them.</li>
+    </ul>
+  </div>
+  <div class="spot-shot">
+    <img class="zoom only-light" tabindex="0" role="button" src="img/treemap-light.png" alt="Treemap of a drive: Users, Windows, Program Files and other folders as cards" loading="lazy" width="1550" height="660">
+    <img class="zoom only-dark" tabindex="0" role="button" src="img/treemap-dark.png" alt="Treemap of a drive in dark mode" loading="lazy" width="1550" height="660">
+  </div>
+</section>
+
+<section id="whats-inside" class="wrap">
+  <h2 class="center">What's inside</h2>
+  <div class="grid">
+    <article class="card"><h3>Storage Analyzer</h3><p>A sortable folder tree with size, size on disk, share of parent, file and folder counts, and last modified. Click a column header to sort.</p></article>
+    <article class="card"><h3>Large Files</h3><p>Filter by minimum size, file type, and age to find the few files that take most of your space. Open the location or remove them from the same page.</p></article>
+    <article class="card"><h3>Temporary Files</h3><p>Scan your temp folder and clean files older than 24 hours, 7 days, or 30 days. You see the recoverable space before anything is removed.</p></article>
+    <article class="card"><h3>Recycle Bin manager</h3><p>List, restore, or permanently delete what is in the Recycle Bin.</p></article>
+    <article class="card"><h3>Dashboard and trends</h3><p>Used and free space for every drive, plus how much it changed over the last days, and usage by file type.</p></article>
+    <article class="card"><h3>Remembers your last scan</h3><p>Results are there when you open the app and update as files change, so you rarely need to rescan. You can switch this off in Settings.</p></article>
+    <article class="card"><h3>Light, dark, and your accent</h3><p>Near-black text in light mode, a pure-black dark theme, follow Windows, and seven accent colors.</p></article>
+    <article class="card"><h3>Fast and small</h3><p>Native C++ with no runtime or framework. Scans with several worker threads and stays light on memory.</p></article>
+  </div>
+</section>
+
+<section class="shots wrap" aria-label="More screenshots">
+  <figure>
+    <img class="zoom only-light" tabindex="0" role="button" src="img/analyzer-light.png" alt="Storage Analyzer list with size, on-disk size and percentage bars" loading="lazy" width="1550" height="780">
+    <img class="zoom only-dark" tabindex="0" role="button" src="img/analyzer-dark.png" alt="Storage Analyzer in dark mode" loading="lazy" width="1550" height="780">
+    <figcaption>Storage Analyzer: sort by size, share, or count.</figcaption>
+  </figure>
+  <figure>
+    <img class="zoom only-light" tabindex="0" role="button" src="img/settings-light.png" alt="Settings page with theme, accent colors and safety options" loading="lazy" width="1550" height="600">
+    <img class="zoom only-dark" tabindex="0" role="button" src="img/settings-dark.png" alt="Settings page in dark mode" loading="lazy" width="1550" height="600">
+    <figcaption>Settings: theme, accent color, deletion confirmations, ignored folders.</figcaption>
+  </figure>
+</section>
+
+<section id="safety" class="safety wrap">
+  <h2 class="center">Built so you don't break your PC</h2>
+  <p class="center sub">A cleaner is only useful if you can trust it. These are defaults, not options you have to find.</p>
+  <div class="grid g3">
+    <article class="card"><h3>System paths are protected</h3><p>Windows, Program Files, and other critical folders can't be deleted from the app.</p></article>
+    <article class="card"><h3>Recycle Bin by default</h3><p>"Move to Recycle Bin" is the main action. Permanent deletion is separate and asks for a second confirmation.</p></article>
+    <article class="card"><h3>App data is hidden</h3><p>AppData and ProgramData are hidden from lists unless you turn them on in Settings, and always counted in sizes.</p></article>
+    <article class="card"><h3>It runs as you</h3><p>No administrator rights and no services. It never asks for elevation.</p></article>
+    <article class="card"><h3>Private by design</h3><p>No network access and no telemetry. The saved scan stays on your PC in your local app data folder and can be cleared in Settings.</p></article>
+    <article class="card"><h3>Open to inspection</h3><p>MIT licensed with the build done in public by GitHub Actions. Check the SHA-256 against the published value.</p></article>
+  </div>
+</section>
+
+<section id="faq" class="faq wrap">
+  <h2 class="center">Questions</h2>
+  <details><summary>Windows says "Windows protected your PC". Is it safe?</summary>
+    <p>New and unsigned apps trigger SmartScreen. Releases are not code-signed yet (signing is in progress). Click <b>More info</b>, then <b>Run anyway</b>, or right-click the file, open Properties, and tick <b>Unblock</b>. You can compare the file with the published SHA-256: <code>certutil -hashfile StorageScope.exe SHA256</code>.</p></details>
+  <details><summary>Does it delete anything on its own?</summary>
+    <p>No. Nothing is removed until you select items and confirm. Moving to the Recycle Bin is the default, and permanent deletion needs a second confirmation.</p></details>
+  <details><summary>Does it send my data anywhere?</summary>
+    <p>No. It makes no network connections. Settings, history, and the optional saved scan live in <code>%LOCALAPPDATA%\StorageScope</code>.</p></details>
+  <details><summary>How do I uninstall it?</summary>
+    <p>Delete the exe. To remove its saved data too, delete the <code>StorageScope</code> folder in <code>%LOCALAPPDATA%</code>.</p></details>
+  <details><summary>Which Windows versions work?</summary>
+    <p>Windows 10 and 11, 64-bit.</p></details>
+</section>
+
+<section class="band wrap">
+  <h2>Try it on your own drives</h2>
+  <p class="lead">Free, portable, and under 1 MB.</p>
+  <div class="cta"><a class="btn primary big" href="#/download">Go to download</a></div>
+</section>
+</div>
+
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>StorageScope &middot; MIT license</span>
+    <span><a href="https://github.com/shahriarmostafiz/storagescope">GitHub</a> &middot; <a href="https://github.com/shahriarmostafiz/storagescope/issues">Report an issue</a> &middot; <a href="https://github.com/shahriarmostafiz/storagescope/releases">Releases</a></span>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
+
