@@ -102,8 +102,13 @@ bool TempCleanup::IsCategoryValid(const std::wstring& dir) const {
     for (const auto& ig : ignored_)
         if (path::IsSameOrUnder(c, ig)) return false;  // the whole category is inside an ignored folder
     std::wstring leaf = path::Leaf(c);
-    if (!path::EqualsNoCase(leaf, L"Temp") && !path::EqualsNoCase(leaf, L"Tmp") && !path::EqualsNoCase(leaf, L"CrashDumps"))
-        return false;
+    bool temp = path::EqualsNoCase(leaf, L"Temp") || path::EqualsNoCase(leaf, L"Tmp") || path::EqualsNoCase(leaf, L"CrashDumps");
+    if (!temp) {  // cache folders: well-known leaf names, and only inside the user's own %LOCALAPPDATA%
+        bool cache = false;
+        for (const wchar_t* n : {L"INetCache", L"WER", L"Cache", L"Code Cache", L"GPUCache", L"cache2"}) cache = cache || path::EqualsNoCase(leaf, n);
+        std::wstring local = path::Canonicalize(EnvVar(L"LOCALAPPDATA"));
+        if (!cache || local.empty() || !path::IsSameOrUnder(c, local)) return false;
+    }
     DWORD a = GetFileAttributesW(path::ToExtended(c).c_str());
     if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY) || (a & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
     return prot_.Classify(c).level <= ProtectionLevel::Caution;  // %TEMP% lives in AppData => Caution is expected
@@ -111,18 +116,52 @@ bool TempCleanup::IsCategoryValid(const std::wstring& dir) const {
 
 std::vector<TempCategory> TempCleanup::DiscoverCategories() const {
     std::vector<TempCategory> out;
+    bool cacheKind = false;
     auto add = [&](const wchar_t* name, const std::wstring& raw, TempRisk risk) {
         std::wstring c = path::Canonicalize(raw);
         if (c.empty() || !IsCategoryValid(c)) return;
         for (auto& e : out)
             if (path::EqualsNoCase(e.path, c)) return;
-        out.push_back({name, c, risk});
+        out.push_back({name, c, risk, cacheKind});
     };
     add(L"User temporary files", EnvVar(L"TEMP"), TempRisk::Low);
     std::wstring local = EnvVar(L"LOCALAPPDATA");
     if (!local.empty()) {
         add(L"Application temporary files", path::Join(local, L"Temp"), TempRisk::Low);
         add(L"Crash dumps", path::Join(local, L"CrashDumps"), TempRisk::Low);
+        cacheKind = true;  // everything from here on is a cache
+        add(L"Windows web cache",path::Join(local, L"Microsoft\\Windows\\INetCache"), TempRisk::Low);
+        add(L"Windows error reports", path::Join(local, L"Microsoft\\Windows\\WER"), TempRisk::Low);
+        // Browser caches are rebuilt on demand but make the next page loads slower; close the browser first (files in use are skipped).
+        struct B {
+            const wchar_t* name;
+            const wchar_t* dir;
+        };
+        for (const B& b : {B{L"Chrome", L"Google\\Chrome"}, B{L"Edge", L"Microsoft\\Edge"}, B{L"Brave", L"BraveSoftware\\Brave-Browser"}}) {
+            std::wstring ud = path::Join(path::Join(local, b.dir), L"User Data");
+            WIN32_FIND_DATAW pf;  // every profile: "Default", "Profile 1", "Profile 2", ...
+            HANDLE ph = FindFirstFileExW(path::ToExtended(path::Join(ud, L"*")).c_str(), FindExInfoBasic, &pf, FindExSearchNameMatch, nullptr, 0);
+            if (ph == INVALID_HANDLE_VALUE) continue;
+            do {
+                std::wstring pn = pf.cFileName;
+                if (!(pf.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (pn != L"Default" && pn.rfind(L"Profile ", 0) != 0)) continue;
+                std::wstring tag = std::wstring(b.name) + (pn == L"Default" ? L"" : L" (" + pn + L")");
+                std::wstring d = path::Join(ud, pn);
+                add((tag + L" cache").c_str(), path::Join(d, L"Cache"), TempRisk::Medium);
+                add((tag + L" code cache").c_str(), path::Join(d, L"Code Cache"), TempRisk::Medium);
+            } while (FindNextFileW(ph, &pf));
+            FindClose(ph);
+        }
+        WIN32_FIND_DATAW fd;  // Firefox: one cache2 folder per profile
+        std::wstring profiles = path::Join(local, L"Mozilla\\Firefox\\Profiles");
+        if (HANDLE h = FindFirstFileExW(path::ToExtended(path::Join(profiles, L"*")).c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+            h != INVALID_HANDLE_VALUE) {
+            do {
+                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != L'.')
+                    add(L"Firefox cache", path::Join(path::Join(profiles, fd.cFileName), L"cache2"), TempRisk::Medium);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
     }
     return out;
 }

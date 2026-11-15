@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -9,6 +10,8 @@ namespace ss {
 
 class LargeFilesView : public View {
 public:
+    // old = the "Old Files" page: same list, but the age filter is the main control (default 3 months) and sizes start small.
+    explicit LargeFilesView(bool old = false) : old_(old) {}
     void OnCreate() override;
     void Layout(int w, int h) override;
     LRESULT OnMessage(UINT m, WPARAM w, LPARAM l) override;
@@ -31,6 +34,9 @@ private:
     void SyncSortUi();
     std::vector<ScanNode*> rows_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column
+    uint64_t Mod(const ScanNode* n) const;
+    std::unordered_map<const ScanNode*, uint64_t> newest_;  // Old Files: newest modified time inside each folder
+    bool old_ = false;
     int sortCol_ = 1;  // Size
     bool sortAsc_ = false;
     int lastW_ = 0, lastH_ = 0;

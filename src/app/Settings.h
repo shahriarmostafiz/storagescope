@@ -16,6 +16,8 @@ struct Settings {
     uint32_t workers = 0;        // 0 = auto
     uint32_t theme = 0;          // 0 = follow Windows, 1 = light, 2 = dark
     uint32_t accent = 0;         // accent colour preset (index into the table in View.cpp; 0 = Emerald)
+    uint32_t oldAge = 1;                // Old Files page: index into its age list (1 = 3 months)
+    uint32_t oldSize = 1;               // Old Files page: index into its size list (1 = 10 MB)
     std::vector<std::wstring> ignored;  // canonical folders/drives that scans skip entirely
     bool keepHistory = true;            // remember free space per drive per day (History) for the Dashboard trend
     bool rememberScan = true;           // save the last scan to disk and load it at start-up (stores file/folder names locally)

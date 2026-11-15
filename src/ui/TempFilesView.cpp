@@ -18,7 +18,7 @@ const uint32_t kAges[] = {24, 168, 720, 0};
 TempFilesView::~TempFilesView() = default;
 
 void TempFilesView::OnCreate() {
-    bScan_ = Make(L"BUTTON", L"Scan Temporary Files", WS_TABSTOP | BS_OWNERDRAW, ID_SCAN);
+    bScan_ = Make(L"BUTTON", cache_ ? L"Scan Cache Files" : L"Scan Temporary Files", WS_TABSTOP | BS_OWNERDRAW, ID_SCAN);
     lblAge_ = Make(L"STATIC", L"Delete files:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbAge_ = Make(L"SSCombo", L"Delete files older than", WS_TABSTOP, ID_AGE);
     for (const wchar_t* s : {L"Older than 24 hours", L"Older than 7 days", L"Older than 30 days", L"All eligible files"})
@@ -47,8 +47,11 @@ void TempFilesView::OnCreate() {
     }
     result_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_RESULT);
     note_ = Make(L"SSInfo",
-                 L"Only user-level temp folders are listed. Cleaned files are deleted permanently (not sent to the Recycle Bin). "
-                 L"Files that are in use are skipped. Windows system folders, WinSxS, drivers, browser profiles and the registry are never touched.",
+                 cache_ ? L"Only your own cache folders are listed (Windows web cache, error reports, Chrome, Edge, Brave and Firefox). Caches are rebuilt "
+                          L"automatically, but the next page loads are slower. Cleaned files are deleted permanently (not sent to the Recycle Bin). "
+                          L"Files that are in use are skipped, so close your browser first. Logins, cookies, history and bookmarks are never touched."
+                        : L"Only user-level temp folders are listed. Cleaned files are deleted permanently (not sent to the Recycle Bin). "
+                          L"Files that are in use are skipped. Windows system folders, WinSxS, drivers, browser profiles and the registry are never touched.",
                  WS_TABSTOP, ID_NOTE);
 }
 
@@ -99,7 +102,8 @@ bool TempFilesView::Checked(int i) const { return ListView_GetCheckState(list_, 
 void TempFilesView::Discover() {
     TempCleanup tc(mw_->protection(), mw_->settings().ignored);
     cats_.clear();
-    for (auto& c : tc.DiscoverCategories()) cats_.push_back({c, {}, false});
+    for (auto& c : tc.DiscoverCategories())
+        if (c.cache == cache_) cats_.push_back({c, {}, false});
     FillList();
 }
 
@@ -118,7 +122,7 @@ void TempFilesView::FillList() {
         std::wstring size = r.scanned ? FormatBytes(r.res.bytes) : L"-";
         ListView_SetItemText(list_, static_cast<int>(i), 2, files.data());
         ListView_SetItemText(list_, static_cast<int>(i), 3, size.data());
-        ListView_SetItemText(list_, static_cast<int>(i), 4, const_cast<wchar_t*>(L"Low"));
+        ListView_SetItemText(list_, static_cast<int>(i), 4, const_cast<wchar_t*>(r.cat.risk == TempRisk::Medium ? L"Medium" : L"Low"));
         if (r.scanned) ListView_SetCheckState(list_, static_cast<int>(i), TRUE);
         if (r.scanned) total += r.res.bytes;
     }
@@ -126,7 +130,7 @@ void TempFilesView::FillList() {
     bool any = false;
     for (auto& r : cats_) any = any || r.scanned;
     SetWindowTextW(total_, any ? (L"Recoverable space: " + FormatBytes(total)).c_str()
-                               : (cats_.empty() ? L"No known temporary folders were found." : L"Recoverable space: not scanned yet"));
+                               : (cats_.empty() ? (cache_ ? L"No known cache folders were found." : L"No known temporary folders were found.") : L"Recoverable space: not scanned yet"));
     UpdateButtons();
 }
 
@@ -155,7 +159,7 @@ void TempFilesView::StartScan(bool afterClean) {
     working_ = true;
     if (!afterClean) cleanedNote_.clear();
     UpdateButtons();
-    SetWindowTextW(result_, (cleanedNote_.empty() ? L"Scanning temporary files..." : cleanedNote_ + L"\r\nRefreshing the list...").c_str());
+    SetWindowTextW(result_, (cleanedNote_.empty() ? (cache_ ? L"Scanning cache files..." : L"Scanning temporary files...") : cleanedNote_ + L"\r\nRefreshing the list...").c_str());
     uint32_t hours = AgeHours();
     std::vector<TempCategory> cats;
     for (auto& r : cats_) cats.push_back(r.cat);
@@ -183,7 +187,7 @@ void TempFilesView::StartClean() {
     if (todo.empty()) return;
     static const wchar_t* ageText[] = {L"older than 24 hours", L"older than 7 days", L"older than 30 days", L"all eligible files"};
     int ai = static_cast<int>(SendMessageW(cbAge_, CB_GETCURSEL, 0, 0));
-    if (!mw_->Confirm(L"Clean the selected temporary files?",
+    if (!mw_->Confirm(cache_ ? L"Clean the selected cache files?" : L"Clean the selected temporary files?",
                       L"Categories:" + names + L"\n\nFiles: " + ageText[(ai < 0 || ai > 3) ? 0 : ai] +
                           L"\n\nFiles are deleted permanently. Files that are currently in use are skipped.",
                       L"Clean", false))
@@ -227,7 +231,7 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             SetWindowTextW(result_, (cleanedNote_.empty() ? found : cleanedNote_ + L"\r\n" + found).c_str());
             if (pendingConfirm_) {  // the list behind this box is already refreshed
                 pendingConfirm_ = false;
-                mw_->ShowMessage(L"Temporary files cleaned",
+                mw_->ShowMessage(cache_ ? L"Cache files cleaned" : L"Temporary files cleaned",
                                  confirmText_ + L"\n\nThe list has been refreshed: " + Plural(files, L"eligible file", L"eligible files") + L" (" +
                                      FormatBytes(bytes) + (files == 1 ? L") remains." : L") remain."));
             }
@@ -252,7 +256,7 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                            (r.inUseFiles ? L", " + FormatCount(r.inUseFiles) + L" currently in use" : L"") + L")";
             if (r.rejected) confirmText_ += L"\nOne folder failed the safety validation and was not touched.";
             pendingConfirm_ = true;
-            mw_->SetStatus(L"Temporary files cleaned: " + FormatBytes(r.cleanedBytes));
+            mw_->SetStatus((cache_ ? L"Cache files cleaned: " : L"Temporary files cleaned: ") + FormatBytes(r.cleanedBytes));
             mw_->DataChanged();       // drive statistics
             StartScan(true);          // refresh the list so it shows what is left, not the old numbers
             return 0;

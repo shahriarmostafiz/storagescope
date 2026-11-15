@@ -8,12 +8,13 @@
 
 namespace ss {
 
-enum class TempRisk { Low };
+enum class TempRisk { Low, Medium };  // Medium = browser caches: safe, but the next page loads are slower
 
 struct TempCategory {
     std::wstring name;   // "User temporary files"
     std::wstring path;   // canonical directory
     TempRisk risk = TempRisk::Low;
+    bool cache = false;  // browser / web / error-report caches: listed on the Cache Files page, the rest on Temporary Files
 };
 
 struct TempScanResult {
@@ -34,9 +35,9 @@ public:
     // `ignored`: the user's ignore list. A category inside an ignored folder is rejected; ignored sub-folders are never touched.
     explicit TempCleanup(const PathProtectionService& p, std::vector<std::wstring> ignored = {}) : prot_(p), ignored_(std::move(ignored)) {}
 
-    // %TEMP%, %LOCALAPPDATA%\Temp (if different), %LOCALAPPDATA%\CrashDumps. Only valid, existing ones.
+    // %TEMP%, %LOCALAPPDATA%\Temp (if different), CrashDumps, web cache, error reports, browser caches. Only valid, existing ones.
     std::vector<TempCategory> DiscoverCategories() const;
-    // Leaf must be Temp/Tmp/CrashDumps, not a reparse point, not a drive root, not Critical/NoDelete.
+    // Leaf must be Temp/Tmp/CrashDumps, or a known cache folder inside %LOCALAPPDATA%; not a reparse point, not a drive root, not Critical/NoDelete.
     bool IsCategoryValid(const std::wstring& dir) const;
 
     // minAgeHours == 0 means "all eligible" (files touched in the last minute are still always kept).

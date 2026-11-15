@@ -990,6 +990,8 @@ static void TestTemp(const std::wstring& base) {
     CHECK(!tc.IsCategoryValid(L"C:\\"));
     CHECK(!tc.IsCategoryValid(base));  // leaf is not Temp/Tmp/CrashDumps
     CHECK(!tc.IsCategoryValid(L"C:\\Users"));
+    CHECK(!tc.IsCategoryValid(base + L"\\Cache"));  // a cache leaf outside %LOCALAPPDATA% is refused
+    CHECK(!tc.IsCategoryValid(L"C:\\Users\\Public\\Cache"));
     TempCategory bad{L"bad", L"C:\\Windows\\Temp", TempRisk::Low};
     CHECK(tc.Clean(bad, 0, {}).rejected);
     TempCategory docs{L"docs", base, TempRisk::Low};

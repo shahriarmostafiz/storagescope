@@ -12,6 +12,7 @@ class MainWindow;
 
 class TempFilesView : public View {
 public:
+    explicit TempFilesView(bool cache = false) : cache_(cache) {}  // true = the "Cache Files" page
     ~TempFilesView() override;
     void OnCreate() override;
     void Layout(int w, int h) override;
@@ -41,6 +42,7 @@ private:
     std::wstring confirmText_;   // shown in a message box once the post-clean refresh has finished
     bool pendingConfirm_ = false;
     std::wstring cleanedNote_;  // "Cleaned: ..." summary kept on screen while the list refreshes after a clean
+    bool cache_ = false;
     bool working_ = false;
     bool filling_ = false;
     // last members: joined first

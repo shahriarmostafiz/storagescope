@@ -34,9 +34,10 @@ std::wstring LowerExt(const ScanNode* n) {
 void LargeFilesView::OnCreate() {
     lblSize_ = Make(L"STATIC", L"Minimum size:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbSize_ = Make(L"SSCombo", L"Minimum size", WS_TABSTOP, ID_SIZE);
-    for (const wchar_t* s : {L"100 MB", L"500 MB", L"1 GB", L"5 GB", L"Custom"})
+    for (const wchar_t* s : old_ ? std::initializer_list<const wchar_t*>{L"1 MB", L"10 MB", L"100 MB", L"1 GB", L"Custom"}
+                                 : std::initializer_list<const wchar_t*>{L"100 MB", L"500 MB", L"1 GB", L"5 GB", L"Custom"})
         SendMessageW(cbSize_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-    SendMessageW(cbSize_, CB_SETCURSEL, 0, 0);
+    SendMessageW(cbSize_, CB_SETCURSEL, old_ ? mw_->settings().oldSize : 0, 0);
     edCustom_ = Make(L"EDIT", L"250", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, ID_CUSTOM, WS_EX_CLIENTEDGE);
     lblMb_ = Make(L"STATIC", L"MB", SS_LEFT | SS_CENTERIMAGE, 0);
     EnableWindow(edCustom_, FALSE);
@@ -48,11 +49,12 @@ void LargeFilesView::OnCreate() {
     for (int i = 0; i < kCategoryCount; ++i)
         SendMessageW(cbType_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(CategoryName(static_cast<FileCategory>(i))));
     SendMessageW(cbType_, CB_SETCURSEL, 0, 0);
-    lblStale_ = Make(L"STATIC", L"Last modified:", SS_LEFT | SS_CENTERIMAGE, 0);
+    lblStale_ = Make(L"STATIC", old_ ? L"Not modified in:" : L"Last modified:",SS_LEFT | SS_CENTERIMAGE, 0);
     cbStale_ = Make(L"SSCombo", L"Last modified", WS_TABSTOP, ID_STALE);  // old and big = the safest cleanup candidates
-    for (const wchar_t* s : {L"Any time", L"Older than 6 months", L"Older than 1 year", L"Older than 2 years"})
+    for (const wchar_t* s : old_ ? std::initializer_list<const wchar_t*>{L"Older than 1 month", L"Older than 3 months", L"Older than 6 months", L"Older than 1 year", L"Older than 2 years"}
+                                 : std::initializer_list<const wchar_t*>{L"Any time", L"Older than 6 months", L"Older than 1 year", L"Older than 2 years"})
         SendMessageW(cbStale_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-    SendMessageW(cbStale_, CB_SETCURSEL, 0, 0);
+    SendMessageW(cbStale_, CB_SETCURSEL, old_ ? mw_->settings().oldAge : 0, 0);
     bBasket_ = Make(L"BUTTON", L"Add to Basket", WS_TABSTOP | BS_OWNERDRAW, ID_BASKET);
 
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
@@ -110,7 +112,7 @@ void LargeFilesView::Layout(int w, int h) {
     group({{lblSize_, 96}, {cbSize_, 110}});
     if (custom) group({{edCustom_, 70}, {lblMb_, 30}});
     group({{lblType_, 44}, {cbType_, 150}});
-    group({{lblStale_, 112}, {cbStale_, 230}});
+    group({{lblStale_, old_ ? 130 : 112}, {cbStale_, 230}});
     group({{bRefresh_, 100}});
     y += ch + gap;
     MoveWindow(info_, m, y, w - 2 * m, mw_->S(24), TRUE);
@@ -141,7 +143,16 @@ void LargeFilesView::SyncSortUi() {  // the sort order is shown as an arrow in t
     }
 }
 
+uint64_t LargeFilesView::Mod(const ScanNode* n) const {  // folders: the newest file inside (Old Files page); files: their own time
+    if (n->type == NodeType::Directory) {
+        auto it = newest_.find(n);
+        if (it != newest_.end()) return it->second;
+    }
+    return n->modified;
+}
+
 void LargeFilesView::DropReferences() {
+    newest_.clear();
     rows_.clear();
     checked_.clear();
     ListView_SetItemCountEx(list_, 0, 0);
@@ -149,11 +160,10 @@ void LargeFilesView::DropReferences() {
 
 uint64_t LargeFilesView::Threshold() const {
     static const uint64_t mb = 1024ull * 1024ull;
-    switch (SendMessageW(cbSize_, CB_GETCURSEL, 0, 0)) {
-        case 0: return 100 * mb;
-        case 1: return 500 * mb;
-        case 2: return 1024 * mb;
-        case 3: return 5 * 1024 * mb;
+    static const uint64_t kLarge[] = {100, 500, 1024, 5 * 1024}, kOld[] = {1, 10, 100, 1024};
+    LRESULT sel = SendMessageW(cbSize_, CB_GETCURSEL, 0, 0);
+    switch (sel) {
+        case 0: case 1: case 2: case 3: return (old_ ? kOld : kLarge)[sel] * mb;
         default: {
             wchar_t b[16];
             GetWindowTextW(edCustom_, b, 16);
@@ -169,9 +179,10 @@ void LargeFilesView::Rebuild() {
     uint64_t total = 0;
     uint64_t staleCutoff = ~0ull;  // files modified at or before this FILETIME qualify
     {
-        static const int kDays[] = {0, 183, 365, 730};
+        static const int kDaysLarge[] = {0, 183, 365, 730}, kDaysOld[] = {30, 91, 183, 365, 730};
+        const int* kDays = old_ ? kDaysOld : kDaysLarge;
         int si = static_cast<int>(SendMessageW(cbStale_, CB_GETCURSEL, 0, 0));
-        if (si > 0 && si < 4) {
+        if (si >= 0 && si < (old_ ? 5 : 4) && kDays[si] > 0) {
             FILETIME now;
             GetSystemTimeAsFileTime(&now);
             uint64_t t = (static_cast<uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
@@ -180,6 +191,38 @@ void LargeFilesView::Rebuild() {
     }
     if (sc) {
         uint64_t minSize = Threshold();
+        auto visible = [&](const ScanNode& c) {
+            return !(c.attrs & FILE_ATTRIBUTE_SYSTEM) && (mw_->settings().showHidden || !(c.attrs & FILE_ATTRIBUTE_HIDDEN)) &&
+                   !(c.type == NodeType::Directory && !mw_->settings().showAppData && IsAppDataRoot(&c));
+        };
+        newest_.clear();
+        if (old_) {  // newest modified time inside each folder, so a whole untouched folder can be listed as one row
+            std::vector<ScanNode*> order{sc->root.get()}, st{sc->root.get()};  // a parent always precedes its children
+            while (!st.empty()) {
+                ScanNode* n = st.back();
+                st.pop_back();
+                if (!n->dir) continue;
+                for (auto& c : n->dir->children)
+                    if (!c.removed && c.type == NodeType::Directory && visible(c)) {
+                        order.push_back(&c);
+                        st.push_back(&c);
+                    }
+            }
+            for (size_t i = order.size(); i-- > 0;) {  // children first
+                ScanNode* d = order[i];
+                uint64_t m = d->modified;
+                if (d->dir)
+                    for (auto& c : d->dir->children) {
+                        if (c.removed) continue;
+                        if (c.type == NodeType::File) m = std::max(m, c.modified);
+                        else if (c.type == NodeType::Directory) {
+                            auto it = newest_.find(&c);
+                            if (it != newest_.end()) m = std::max(m, it->second);
+                        }
+                    }
+                newest_[d] = m;
+            }
+        }
         std::vector<ScanNode*> stack{sc->root.get()};  // walks the existing scan index; no disk access
         while (!stack.empty()) {
             ScanNode* n = stack.back();
@@ -191,6 +234,11 @@ void LargeFilesView::Rebuild() {
                 if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
                 if (c.type == NodeType::Directory) {
                     if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // AppData / ProgramData: advanced
+                    if (old_ && cat == 0 && c.files > 0 && c.size >= minSize && Mod(&c) <= staleCutoff) {  // untouched as a whole: one row
+                        rows_.push_back(&c);
+                        total += c.size;
+                        continue;
+                    }
                     stack.push_back(&c);
                 }
                 else if (c.type == NodeType::File && c.size >= minSize && c.modified <= staleCutoff &&
@@ -216,7 +264,7 @@ void LargeFilesView::Rebuild() {
         switch (sortCol_) {
             case C_NAME: c = CompareStringOrdinal(a->name.c_str(), -1, b->name.c_str(), -1, TRUE) - CSTR_EQUAL; break;
             case C_TYPE: { auto ea = LowerExt(a), eb = LowerExt(b); c = ea < eb ? -1 : ea > eb ? 1 : 0; break; }
-            case C_MOD: c = a->modified < b->modified ? -1 : a->modified > b->modified ? 1 : 0; break;
+            case C_MOD: { uint64_t ma = Mod(a), mb = Mod(b); c = ma < mb ? -1 : ma > mb ? 1 : 0; break; }
             default: c = a->size < b->size ? -1 : a->size > b->size ? 1 : 0;
         }
         return sortAsc_ ? c < 0 : c > 0;
@@ -226,9 +274,11 @@ void LargeFilesView::Rebuild() {
     bool none = rows_.empty();
     ShowWindow(list_, none ? SW_HIDE : SW_SHOW);
     ShowWindow(empty_, none ? SW_SHOW : SW_HIDE);
-    if (none) SetWindowTextW(empty_, !sc ? mw_->EmptyStateText().c_str() : L"No files matching this filter were found.");
-    std::wstring info = sc ? Plural(rows_.size(), L"file", L"files") + L", " + FormatBytes(total) + L" in total" : L"";
-    std::wstring tip = L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.";
+    if (none) SetWindowTextW(empty_, !sc ? mw_->EmptyStateText().c_str() : old_ ? L"Nothing older than this was found. Try a shorter period or a smaller size." : L"No files matching this filter were found.");
+    std::wstring info = sc ? (old_ ? Plural(rows_.size(), L"item", L"items") : Plural(rows_.size(), L"file", L"files")) +L", " + FormatBytes(total) + L" in total" : L"";
+    std::wstring tip = old_ ? L"Age is the last-modified date. Windows does not reliably record when a file was last opened, so a file you open often "
+                              L"but never edit can appear here. Check before removing anything."
+                            : L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.";
     if (sc && !mw_->settings().showAppData)
         if (uint64_t hiddenApp = AppDataBytes(sc->root.get())) {
             info += L"   -   " + FormatBytes(hiddenApp) + L" of app data hidden";
@@ -243,9 +293,9 @@ std::wstring LargeFilesView::CellText(ScanNode* n, int col) const {
     switch (col) {
         case C_NAME: return n->name;
         case C_SIZE: return FormatBytes(n->size);
-        case C_TYPE: return CategoryName(Categorize(n->name));
+        case C_TYPE: return n->type == NodeType::Directory ? L"Folder" : CategoryName(Categorize(n->name));
         case C_LOC: return path::Parent(BuildPath(n));
-        case C_MOD: return FormatFileTime(n->modified);
+        case C_MOD: return FormatFileTime(Mod(n));
     }
     return L"";
 }
@@ -376,6 +426,11 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
         }
         case WM_COMMAND: {
             int id = LOWORD(w), code = HIWORD(w);
+            if (old_ && code == CBN_SELCHANGE) {  // the Old Files choices are remembered (saved with the other settings)
+                LRESULT s = SendMessageW(id == ID_SIZE ? cbSize_ : cbStale_, CB_GETCURSEL, 0, 0);
+                if (id == ID_STALE && s >= 0) mw_->settings().oldAge = static_cast<uint32_t>(s);
+                if (id == ID_SIZE && s >= 0 && s < 4) mw_->settings().oldSize = static_cast<uint32_t>(s);  // "Custom" is not remembered
+            }
             if (id == ID_SIZE && code == CBN_SELCHANGE) {
                 EnableWindow(edCustom_, SendMessageW(cbSize_, CB_GETCURSEL, 0, 0) == 4);
                 Layout(lastW_, lastH_);  // shows or hides the custom-size box

@@ -118,12 +118,14 @@ void Settings::Load() {
             winW = w;
             winH = h;
             maximized = mx != 0;
-            lastPage = pg >= 0 && pg < 7 ? pg : 0;
+            lastPage = pg >= 0 && pg < 9 ? pg : 0;
         }
     }
     u("lastFullScanDay", lastFullScanDay, 0, 0xFFFFFFFFu);
     u("tempAgeHours", tempAgeHours, 24, 720);
     u("workers", workers, 0, 16);
+    u("oldAge", oldAge, 0, 4);
+    u("oldSize", oldSize, 0, 3);
     u("theme", theme, 0, 2);
     u("accent", accent, 0, 255);  // the UI clamps to the presets it has (SetAccent), so adding a preset needs no change here
     if (tempAgeHours != 24 && tempAgeHours != 168 && tempAgeHours != 720) tempAgeHours = 24;
@@ -157,12 +159,12 @@ void Settings::Save() const {
         if (c == '\\' || c == '"') esc += '\\';
         esc += c;
     }
-    char extra[400];
+    char extra[500];
     sprintf_s(extra,
               "  \"keepHistory\": %s,\n  \"rememberScan\": %s,\n  \"autoUpdate\": %s,\n  \"firstRunDone\": %s,\n  \"lastFullScanDay\": %u,\n"
-              "  \"window\": \"%d,%d,%d,%d,%d,%d\",\n",
+              "  \"oldAge\": %u,\n  \"oldSize\": %u,\n  \"window\": \"%d,%d,%d,%d,%d,%d\",\n",
               keepHistory ? "true" : "false", rememberScan ? "true" : "false", autoUpdate ? "true" : "false", firstRunDone ? "true" : "false",
-              lastFullScanDay, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
+              lastFullScanDay, oldAge, oldSize, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
     std::string j = std::string(buf) + extra + "  \"ignored\": \"" + esc + "\"\n}\n";
 
     std::wstring f = AppDataDir() + L"\\settings.json", tmp = f + L".tmp";
