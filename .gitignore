@@ -7,3 +7,4 @@ build/
 *.bin
 settings.json
 history.csv
+/out
