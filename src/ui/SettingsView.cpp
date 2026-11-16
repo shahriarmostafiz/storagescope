@@ -31,7 +31,7 @@ void SettingsView::OnCreate() {
     hdrScan_ = Make(L"STATIC", L"Scan", SS_LEFT, 0);
     skipReparse_ = Make(L"STATIC", L"Always skipped: reparse points (junctions and symbolic links) and folders you cannot open.", SS_LEFT | SS_NOPREFIX, ID_X1);
     showHidden_ = Make(L"SSCheck", L"Show hidden files", WS_TABSTOP, ID_HIDDEN);
-    showAppData_ = Make(L"SSCheck", L"Show app data (advanced): AppData and ProgramData folders", WS_TABSTOP, ID_APPDATA);
+    showAppData_ = Make(L"SSCheck", L"Show app data (advanced): AppData, ProgramData and tool folders (.vscode, .claude, ...)", WS_TABSTOP, ID_APPDATA);
 
     hdrTemp_ = Make(L"STATIC", L"Temporary file cleanup (default age)", SS_LEFT, 0);
     cbAge_ = Make(L"SSCombo", L"Temporary file age", WS_TABSTOP, ID_R24);

@@ -85,6 +85,34 @@ std::wstring FromUtf8(const std::string& s) {
     return w;
 }
 
+std::string Esc(const std::wstring& w) {  // JSON string body: \ and " escaped
+    std::string out;
+    for (char c : ToUtf8(w)) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+std::wstring Join(const std::vector<std::wstring>& l) {  // '|' cannot occur in a Windows path
+    std::wstring j;
+    for (const auto& p : l) j += (j.empty() ? L"" : L"|") + p;
+    return j;
+}
+
+std::vector<std::wstring> Split(const std::wstring& all) {
+    std::vector<std::wstring> out;
+    size_t pos = 0;
+    while (pos <= all.size()) {
+        size_t e = all.find(L'|', pos);
+        std::wstring c = path::Canonicalize(all.substr(pos, e == std::wstring::npos ? std::wstring::npos : e - pos));
+        if (!c.empty()) out.push_back(c);
+        if (e == std::wstring::npos) break;
+        pos = e + 1;
+    }
+    return out;
+}
+
 }  // namespace
 
 void Settings::Load() {
@@ -118,7 +146,7 @@ void Settings::Load() {
             winW = w;
             winH = h;
             maximized = mx != 0;
-            lastPage = pg >= 0 && pg < 9 ? pg : 0;
+            lastPage = pg >= 0 && pg < 10 ? pg : 0;
         }
     }
     u("lastFullScanDay", lastFullScanDay, 0, 0xFFFFFFFFu);
@@ -126,6 +154,21 @@ void Settings::Load() {
     u("workers", workers, 0, 16);
     u("oldAge", oldAge, 0, 4);
     u("oldSize", oldSize, 0, 3);
+    u("searchFlags", searchFlags, 0, 15);
+    u("searchWhere", searchWhere, 0, 1);
+    u("searchKind", searchKind, 0, 2);
+    u("searchType", searchType, 0, 32);
+    u("searchDate", searchDate, 0, 7);
+    {
+        std::string v;
+        if (ReadString(j, "searchInclude", v)) searchInclude = FromUtf8(v).substr(0, 200);
+        v.clear();
+        if (ReadString(j, "searchExclude", v)) searchExclude = FromUtf8(v).substr(0, 200);
+        v.clear();
+        if (ReadString(j, "searchScope", v)) searchScope = Split(FromUtf8(v));
+        v.clear();
+        if (ReadString(j, "searchSkip", v)) searchSkip = Split(FromUtf8(v));
+    }
     u("theme", theme, 0, 2);
     u("accent", accent, 0, 255);  // the UI clamps to the presets it has (SetAccent), so adding a preset needs no change here
     if (tempAgeHours != 24 && tempAgeHours != 168 && tempAgeHours != 720) tempAgeHours = 24;
@@ -159,13 +202,15 @@ void Settings::Save() const {
         if (c == '\\' || c == '"') esc += '\\';
         esc += c;
     }
-    char extra[500];
+    char extra[800];
     sprintf_s(extra,
               "  \"keepHistory\": %s,\n  \"rememberScan\": %s,\n  \"autoUpdate\": %s,\n  \"firstRunDone\": %s,\n  \"lastFullScanDay\": %u,\n"
-              "  \"oldAge\": %u,\n  \"oldSize\": %u,\n  \"window\": \"%d,%d,%d,%d,%d,%d\",\n",
+              "  \"oldAge\": %u,\n  \"oldSize\": %u,\n  \"searchFlags\": %u,\n  \"searchWhere\": %u,\n  \"searchKind\": %u,\n  \"searchType\": %u,\n  \"searchDate\": %u,\n  \"window\":\"%d,%d,%d,%d,%d,%d\",\n",
               keepHistory ? "true" : "false", rememberScan ? "true" : "false", autoUpdate ? "true" : "false", firstRunDone ? "true" : "false",
-              lastFullScanDay, oldAge, oldSize, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
-    std::string j = std::string(buf) + extra + "  \"ignored\": \"" + esc + "\"\n}\n";
+              lastFullScanDay, oldAge, oldSize, searchFlags, searchWhere, searchKind, searchType, searchDate, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
+    std::string j = std::string(buf) + extra + "  \"searchInclude\": \"" + Esc(searchInclude) + "\",\n  \"searchExclude\": \"" + Esc(searchExclude) +
+                    "\",\n  \"searchScope\": \"" + Esc(Join(searchScope)) + "\",\n  \"searchSkip\": \"" + Esc(Join(searchSkip)) +
+                    "\",\n  \"ignored\": \"" + esc + "\"\n}\n";
 
     std::wstring f = AppDataDir() + L"\\settings.json", tmp = f + L".tmp";
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

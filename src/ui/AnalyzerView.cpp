@@ -24,6 +24,16 @@ enum {
 };
 constexpr UINT_PTR kSelTimer = 1, kSearchTimer = 2;
 constexpr size_t kMaxSearchResults = 20000;
+constexpr WORD kEnterPressed = 0x7001;  // notification code sent to the page when Enter is pressed in the search box
+
+// Enter in the search box opens the Search page with the same text (type filters, folders and more live there).
+LRESULT CALLBACK SearchBoxProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    if ((m == WM_KEYDOWN || m == WM_CHAR) && (w == VK_RETURN)) {
+        if (m == WM_KEYDOWN) SendMessageW(GetParent(h), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(h), kEnterPressed), reinterpret_cast<LPARAM>(h));
+        return 0;  // also swallows the WM_CHAR so there is no beep
+    }
+    return DefSubclassProc(h, m, w, l);
+}
 constexpr int kMaxPreCheck = 300;  // classify at most this many selected items to enable/disable buttons
 
 bool ContainsNoCase(const std::wstring& hay, const std::wstring& lowerNeedle) {
@@ -62,7 +72,8 @@ int Cmp(T a, T b) { return a < b ? -1 : (a > b ? 1 : 0); }
 void AnalyzerView::OnCreate() {
     up_ = Make(L"BUTTON", L"Up", WS_TABSTOP | BS_OWNERDRAW, ID_UP);
     search_ = Make(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH);  // borderless: the rounded frame is painted by the page
-    SendMessageW(search_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search files and folders"));
+    SendMessageW(search_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search files and folders (Enter: advanced search)"));
+    SetWindowSubclass(search_, SearchBoxProc, 1, 0);
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
     ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP | LVS_EX_CHECKBOXES);
@@ -97,7 +108,7 @@ void AnalyzerView::OnCreate() {
     bApps_ = Make(L"BUTTON", L"Open Installed Apps", WS_TABSTOP | BS_OWNERDRAW, ID_APPS);
     ShowWindow(bApps_, SW_HIDE);
     status_ = Make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX | SS_PATHELLIPSIS, ID_STATUS);
-    infoIcon_ = Make(L"SSInfo", L"Folder sizes include app data (AppData and ProgramData). It is hidden from the lists by default. Turn on \"Show app data\" in Settings > Scan to list it.",
+    infoIcon_ = Make(L"SSInfo", L"Folder sizes include app data (AppData, ProgramData and tool folders like .vscode). It is hidden from the lists by default. Turn on \"Show app data\" in Settings > Scan to list it.",
                      WS_TABSTOP, ID_INFOICON);
     ShowWindow(infoIcon_, SW_HIDE);
     empty_ = Make(L"STATIC", L"", SS_CENTER | SS_NOPREFIX, ID_EMPTY);
@@ -719,7 +730,11 @@ LRESULT AnalyzerView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                 case ID_SCAN: mw_->ShowPage(0); break;
                 case ID_SEARCH:
                     if (HIWORD(w) == EN_CHANGE && !suppressSearch_) SetTimer(hwnd_, kSearchTimer, 350, nullptr);  // debounce
-                    else if (HIWORD(w) == EN_SETFOCUS || HIWORD(w) == EN_KILLFOCUS) InvalidateRect(hwnd_, &searchFrame_, FALSE);
+                    else if (HIWORD(w) == kEnterPressed) {
+                        wchar_t b[512];
+                        GetWindowTextW(search_, b, 512);
+                        mw_->OpenSearch(b);
+                    } else if (HIWORD(w) == EN_SETFOCUS || HIWORD(w) == EN_KILLFOCUS) InvalidateRect(hwnd_, &searchFrame_, FALSE);
                     break;
                 default:
                     if (HIWORD(w) == BN_CLICKED) Act(LOWORD(w));

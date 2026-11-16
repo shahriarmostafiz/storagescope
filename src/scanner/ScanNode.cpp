@@ -22,12 +22,14 @@ bool IsAppDataPath(const std::wstring& p) {
     if (a == std::wstring::npos || !path::EqualsNoCase(rest.substr(0, a), L"Users")) return false;
     size_t b = rest.find(L'\\', a + 1);
     if (b == std::wstring::npos || b == a + 1) return false;
-    return path::EqualsNoCase(rest.substr(b + 1), L"AppData");
+    std::wstring leaf = rest.substr(b + 1);
+    // Also the dot-folders tools keep in the profile root (.vscode, .claude, .cache, .docker ...): managed by those tools, not by the user.
+    return path::EqualsNoCase(leaf, L"AppData") || (leaf.size() > 1 && leaf[0] == L'.' && leaf.find(L'\\') == std::wstring::npos);
 }
 
 bool IsAppDataRoot(const ScanNode* n) {
     if (!n || n->type != NodeType::Directory || n->removed) return false;
-    if (!path::EqualsNoCase(n->name, L"AppData") && !path::EqualsNoCase(n->name, L"ProgramData")) return false;  // cheap test first
+    if (!path::EqualsNoCase(n->name, L"AppData") && !path::EqualsNoCase(n->name, L"ProgramData") && n->name[0] != L'.') return false;  // cheap test first
     return IsAppDataPath(BuildPath(n));
 }
 

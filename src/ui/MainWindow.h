@@ -26,6 +26,7 @@ class LargeFilesView;
 class TempFilesView;
 class SettingsView;
 class TreemapView;
+class SearchView;
 
 enum class DeleteMode { Ask, Recycle, Permanent };
 
@@ -65,6 +66,7 @@ public:
 
     void ApplyFont(HWND root) const;
     void ShowPage(int idx);
+    void OpenSearch(const std::wstring& query);  // Search page with this text already searched
     void BrowseTo(ScanNode* node);            // Storage Analyzer at `node`
     void SettingsChanged();                   // persist + reload views
     void DataChanged();                       // reload all views
@@ -142,13 +144,14 @@ private:
     Settings settings_;
     PathProtectionService prot_{PathProtectionService::ConfigFromEnvironment()};
 
-    std::unique_ptr<View> pages_[9];
+    std::unique_ptr<View> pages_[10];
     DashboardView* dash_ = nullptr;
     TreemapView* treemap_ = nullptr;
     HWND toast_ = nullptr, basketText_ = nullptr, bBasketDel_ = nullptr, bBasketClear_ = nullptr;
     std::vector<ScanNode*> basket_;
     AnalyzerView* analyzer_ = nullptr;
     LargeFilesView* large_ = nullptr;
+    SearchView* search_ = nullptr;
     TempFilesView* temp_ = nullptr;
 
     std::unique_ptr<ScanResult> scan_;

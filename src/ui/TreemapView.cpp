@@ -265,7 +265,7 @@ void TreemapView::UpdateInfo() {
     bool anyApp = hiddenApp_ != 0;
     for (const Tile& tl : tiles_) anyApp = anyApp || tl.locked;
     std::wstring tip = L"Each card shows its size and share of this folder. Click a card to select it, double-click a folder to look inside.";
-    if (anyApp) tip += L"\n\nApp data (AppData and ProgramData) is hidden by default and shown view only. Turn on \"Show app data\" in Settings > Scan to manage it.";
+    if (anyApp) tip += L"\n\nApp data (AppData, ProgramData and tool folders like .vscode) is hidden by default and shown view only. Turn on \"Show app data\" in Settings > Scan to manage it.";
     SetWindowTextW(infoIcon_, tip.c_str());
 }
 

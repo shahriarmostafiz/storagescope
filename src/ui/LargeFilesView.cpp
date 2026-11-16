@@ -191,9 +191,16 @@ void LargeFilesView::Rebuild() {
     }
     if (sc) {
         uint64_t minSize = Threshold();
+        // Windows and installed programs (Program Files...) are never listed: nothing there can be deleted from this app anyway.
+        // Only the top level of a scan is classified (everything below inherits it), so this costs a few lookups, not one per folder.
+        auto blocked = [&](const ScanNode& c) {
+            if (c.type != NodeType::Directory || !(c.scanRoot || (c.parent && c.parent->scanRoot))) return false;
+            std::wstring p = BuildPath(&c);
+            return !path::IsDriveRoot(p) && mw_->protection().Classify(p).level >= ProtectionLevel::NoDelete;
+        };
         auto visible = [&](const ScanNode& c) {
             return !(c.attrs & FILE_ATTRIBUTE_SYSTEM) && (mw_->settings().showHidden || !(c.attrs & FILE_ATTRIBUTE_HIDDEN)) &&
-                   !(c.type == NodeType::Directory && !mw_->settings().showAppData && IsAppDataRoot(&c));
+                   !(c.type == NodeType::Directory && !mw_->settings().showAppData && IsAppDataRoot(&c)) && !blocked(c);
         };
         newest_.clear();
         if (old_) {  // newest modified time inside each folder, so a whole untouched folder can be listed as one row
@@ -223,7 +230,8 @@ void LargeFilesView::Rebuild() {
                 newest_[d] = m;
             }
         }
-        std::vector<ScanNode*> stack{sc->root.get()};  // walks the existing scan index; no disk access
+        std::vector<ScanNode*> stack;  // walks the existing scan index; no disk access
+        if (!blocked(*sc->root)) stack.push_back(sc->root.get());
         while (!stack.empty()) {
             ScanNode* n = stack.back();
             stack.pop_back();
@@ -234,6 +242,7 @@ void LargeFilesView::Rebuild() {
                 if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
                 if (c.type == NodeType::Directory) {
                     if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // AppData / ProgramData: advanced
+                    if (blocked(c)) continue;
                     if (old_ && cat == 0 && c.files > 0 && c.size >= minSize && Mod(&c) <= staleCutoff) {  // untouched as a whole: one row
                         rows_.push_back(&c);
                         total += c.size;
@@ -276,13 +285,13 @@ void LargeFilesView::Rebuild() {
     ShowWindow(empty_, none ? SW_SHOW : SW_HIDE);
     if (none) SetWindowTextW(empty_, !sc ? mw_->EmptyStateText().c_str() : old_ ? L"Nothing older than this was found. Try a shorter period or a smaller size." : L"No files matching this filter were found.");
     std::wstring info = sc ? (old_ ? Plural(rows_.size(), L"item", L"items") : Plural(rows_.size(), L"file", L"files")) +L", " + FormatBytes(total) + L" in total" : L"";
-    std::wstring tip = old_ ? L"Age is the last-modified date. Windows does not reliably record when a file was last opened, so a file you open often "
+    std::wstring tip = std::wstring(L"Windows and installed programs (Program Files) are never listed here.\n\n") + (old_ ? L"Age is the last-modified date. Windows does not reliably record when a file was last opened, so a file you open often "
                               L"but never edit can appear here. Check before removing anything."
-                            : L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.";
+                            : L"File size and extension do not tell you whether a file is safe to delete. Check before removing anything.");
     if (sc && !mw_->settings().showAppData)
         if (uint64_t hiddenApp = AppDataBytes(sc->root.get())) {
             info += L"   -   " + FormatBytes(hiddenApp) + L" of app data hidden";
-            tip += L"\n\nApp data (AppData and ProgramData) is hidden from this list by default. Turn on \"Show app data\" in Settings > Scan to include it.";
+            tip += L"\n\nApp data (AppData, ProgramData and tool folders like .vscode) is hidden from this list by default. Turn on \"Show app data\" in Settings > Scan to include it.";
         }
     SetWindowTextW(info_, info.c_str());
     SetWindowTextW(note_, tip.c_str());  // the tooltip of the "i" icon

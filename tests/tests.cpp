@@ -20,6 +20,7 @@
 #include "scanner/TreeSync.h"
 #include "scanner/ScanStats.h"
 #include "cleanup/TempCleanup.h"
+#include "scanner/SearchIndex.h"
 #include "filesystem/ChangeWatcher.h"
 #include "filesystem/PathUtils.h"
 #include "operations/FileOperationService.h"
@@ -372,15 +373,21 @@ static void TestIgnoreAndSettings(const std::wstring& base) {
     s.accent = 3;
     s.showAppData = true;
     s.workers = 4;
+    s.searchInclude = L"pdf, \"a\\b\"";  // quote and backslash must survive the file
+    s.searchSkip = {root + L"\\skip", root + L"\\a,b"};
+    s.searchDate = 7;
     s.ignored = {L"D:\\", root + L"\\a,b", root + L"\\\u00fcn\u00ef-\u65e5\u672c\u8a9e"};
     s.Save();
     Settings t;
     t.Load();
     SetEnvironmentVariableW(L"LOCALAPPDATA", oldVal);
     CHECK(t.theme == 2 && t.workers == 4 );
-    CHECK(t.accent == 3);  // accent colour preset survives a save/load
+    CHECK(t.accent == 3);
+    CHECK(t.searchInclude == L"pdf, \"a\\b\"" && t.searchDate == 7 && t.searchSkip.size() == 2 && t.searchSkip[1] == root + L"\\a,b");
     CHECK(t.showAppData && !Settings{}.showAppData);  // app data is hidden by default and the choice is saved
     CHECK(IsAppDataPath(L"C:\\ProgramData") && IsAppDataPath(L"c:\\users\\Ann Lee\\appdata") && IsAppDataPath(L"D:\\Users\\x\\AppData\\"));
+    CHECK(IsAppDataPath(L"C:\\Users\\dell\\.vscode") && IsAppDataPath(L"C:\\Users\\dell\\.claude\\"));  // tool dot-folders in a profile root
+    CHECK(!IsAppDataPath(L"C:\\Users\\dell\\.vscode\\extensions") && !IsAppDataPath(L"C:\\Users\\dell\\Documents\\.git") && !IsAppDataPath(L"C:\\Users\\dell\\."));
     CHECK(!IsAppDataPath(L"C:\\Users\\x\\AppData\\Local") && !IsAppDataPath(L"C:\\Users\\x") && !IsAppDataPath(L"C:\\Users\\AppData") &&
           !IsAppDataPath(L"C:\\Program Files\\ProgramData") && !IsAppDataPath(L"C:\\Users\\x\\Documents\\AppData") && !IsAppDataPath(L"ProgramData"));
     CHECK(t.ignored.size() == 3 && t.ignored[0] == L"D:\\" && t.ignored[1] == root + L"\\a,b" &&
@@ -398,6 +405,100 @@ static ScanNode* AddNode(ScanNode* parent, const wchar_t* name, NodeType t, uint
     if (t == NodeType::Directory) c.dir = std::make_unique<DirData>();
     parent->dir->children.push_back(std::move(c));
     return &parent->dir->children.back();
+}
+
+static void TestSearch() {
+    SECTION("Search index");
+    ScanNode root;
+    root.name = L"C:\\";
+    root.type = NodeType::Directory;
+    root.scanRoot = true;
+    root.dir = std::make_unique<DirData>();
+    root.dir->children.reserve(8);  // keeps the pointers below valid
+    ScanNode* docs = AddNode(&root, L"Docs", NodeType::Directory, 0);
+    docs->dir->children.reserve(8);
+    AddNode(docs, L"Report 2025.pdf", NodeType::File, 100);
+    AddNode(docs, L"notes.txt", NodeType::File, 10);
+    AddNode(docs, L"Photo.JPG", NodeType::File, 5000);
+    ScanNode* games = AddNode(&root, L"Games", NodeType::Directory, 0);
+    games->dir->children.reserve(8);
+    ScanNode* saves = AddNode(games, L"saves", NodeType::Directory, 0);
+    saves->dir->children.reserve(4);
+    AddNode(saves, L"a.sav", NodeType::File, 1);
+    AddNode(games, L"game.exe", NodeType::File, 900);
+    AddNode(&root, L"cache.tmp", NodeType::File, 7);
+    SearchIndex ix;
+    ix.Build(&root);
+    CHECK(ix.Size() == 10);
+    auto run = [&](SearchSpec s) { return ix.Run(s).hits.size(); };
+    SearchSpec s;
+    s.text = L"report 2025";
+    CHECK(run(s) == 1);
+    s.text = L"REPORT";
+    CHECK(run(s) == 1);
+    s.matchCase = true;
+    CHECK(run(s) == 0);
+    s = {};
+    s.text = L"*.pdf";
+    CHECK(run(s) == 1);
+    s.text = L"pho*";
+    CHECK(run(s) == 1);
+    s.text = L"\"report 2025\"";  // a quoted phrase is one word
+    CHECK(run(s) == 1);
+    s = {};
+    s.kind = SearchKind::FilesOnly;
+    CHECK(run(s) == 6);
+    s.exclude = L"tmp";
+    CHECK(run(s) == 5);
+    s.exclude = L"*.sav, .tmp";
+    CHECK(run(s) == 4);
+    s = {};
+    s.kind = SearchKind::FoldersOnly;
+    CHECK(run(s) == 3);  // Docs, Games, saves; the scan root is not a result
+    s = {};
+    s.include = L"pdf, .TXT";
+    CHECK(run(s) == 2);  // a type filter leaves out folders
+    s = {};
+    s.category = static_cast<int>(FileCategory::Document);
+    CHECK(run(s) == 2);
+    s = {};
+    s.kind = SearchKind::FilesOnly;
+    s.scopes = {games};
+    CHECK(run(s) == 2);  // a.sav, game.exe
+    s.scopes = {games, saves};  // nested choices are not searched twice
+    CHECK(run(s) == 2);
+    s = {};
+    s.kind = SearchKind::FilesOnly;
+    s.excluded = {saves};
+    CHECK(run(s) == 5);
+    s = {};
+    s.minSize = 1000;
+    CHECK(run(s) == 1);
+    s = {};
+    s.text = L"games\\saves";  // a word with a backslash matches the full path
+    CHECK(run(s) == 2);
+    s = {};
+    s.text = L"game";
+    CHECK(run(s) == 2);  // Games, game.exe
+    s.wholeWord = true;
+    CHECK(run(s) == 1);  // game.exe only
+    s = {};
+    s.regex = true;
+    s.text = L"^re.*pdf$";
+    CHECK(run(s) == 1);
+    s.text = L"(";
+    CHECK(!ix.Run(s).error.empty() && run(s) == 0);
+    s = {};
+    s.hideDir = [](const ScanNode& n) { return n.name == L"Games"; };
+    s.kind = SearchKind::FilesOnly;
+    CHECK(run(s) == 4);  // nothing inside the hidden folder
+    s = {};
+    s.maxResults = 2;
+    CHECK(ix.Run(s).truncated && run(s) == 2);
+    docs->dir->children[1].removed = true;  // a removed node (stale index) is never returned
+    s = {};
+    s.text = L"notes";
+    CHECK(run(s) == 0);
 }
 
 static void TestUiHelpers() {
@@ -1018,6 +1119,7 @@ int main() {
     TestIgnoreAndSettings(base);
     TestTreeEdits(base);
     TestAppData();
+    TestSearch();
     TestUiHelpers();
     TestTempIgnore(base);
     TestStatsAndHistory(base);

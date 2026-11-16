@@ -462,7 +462,7 @@ void DashboardView::Paint() {
             title(titleApp_, L"App data (view only)");
             SelectObject(mem, mw_->font());
             SetTextColor(mem, c.muted);
-            std::wstring n = FormatBytes(appInfo_.total) + L" is held by your apps (AppData and ProgramData).";
+            std::wstring n = FormatBytes(appInfo_.total) + L" is held by your apps (AppData, ProgramData and tool folders like .vscode).";
             DrawTextW(mem, n.c_str(), -1, &noteApp_, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             uint64_t biggest = appInfo_.top.empty() ? 1 : std::max<uint64_t>(1, appInfo_.top.front().size);
             for (size_t i = 0; i < appInfo_.top.size() && i < appRows_.size(); ++i) {

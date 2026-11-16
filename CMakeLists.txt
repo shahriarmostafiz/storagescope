@@ -23,6 +23,7 @@ add_library(storagescope_core STATIC
   src/scanner/ScanNode.cpp
   src/scanner/DirectoryScanner.cpp
   src/scanner/FileTypes.cpp
+  src/scanner/SearchIndex.cpp
   src/scanner/ScanStats.cpp
   src/scanner/ScanSnapshot.cpp
   src/scanner/DirectoryEnum.cpp

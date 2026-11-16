@@ -15,6 +15,7 @@
 #include "ui/AnalyzerView.h"
 #include "ui/DashboardView.h"
 #include "ui/LargeFilesView.h"
+#include "ui/SearchView.h"
 #include "ui/RecycleBinView.h"
 #include "ui/SettingsView.h"
 #include "ui/TreemapView.h"
@@ -29,8 +30,8 @@ namespace {
 
 constexpr int kStopId = 1;
 constexpr int kBasketDelId = 2, kBasketClearId = 3, kDetailsId = 4;
-const wchar_t* kNavItems[] = {L"Dashboard", L"Storage Analyzer", L"Treemap", L"Large Files", L"Old Files", L"Temporary Files", L"Cache Files", L"Recycle Bin", L"Settings"};
-constexpr int kNavCount = 9;
+const wchar_t* kNavItems[] = {L"Dashboard", L"Storage Analyzer", L"Search", L"Treemap", L"Large Files", L"Old Files", L"Temporary Files", L"Cache Files", L"Recycle Bin", L"Settings"};
+constexpr int kNavCount = 10;
 
 int Td(HWND owner, const std::wstring& main, const std::wstring& content, PCWSTR icon, DWORD common,
        std::vector<TASKDIALOG_BUTTON> btns, int defBtn, std::vector<TASKDIALOG_BUTTON> radios = {}, int defRadio = 0,
@@ -131,6 +132,30 @@ int MainWindow::Run(HINSTANCE hi, int nShow) {
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         // Enter/Esc must reach list views and edits untouched; everything else gets Tab/arrow handling.
         bool keys = msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE);
+        if (msg.message == WM_KEYDOWN && msg.wParam != VK_TAB) {
+            wchar_t cls[8] = {};
+            HWND f = GetFocus();
+            if (f && GetClassNameW(f, cls, 8) && !_wcsicmp(cls, L"Edit")) {
+                // plain edits have no Ctrl+Backspace (they insert a block character): delete the previous word ourselves
+                if (msg.wParam == VK_BACK && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    DWORD s = 0, e = 0;
+                    SendMessageW(f, EM_GETSEL, reinterpret_cast<WPARAM>(&s), reinterpret_cast<LPARAM>(&e));
+                    int n = GetWindowTextLengthW(f);
+                    std::wstring t(static_cast<size_t>(n) + 1, L'\0');
+                    GetWindowTextW(f, t.data(), n + 1);
+                    DWORD a = s;
+                    if (a == e) {
+                        auto word = [](wchar_t c) { return iswalnum(c) || c == L'_'; };  // stops at . \ - space, like a code editor
+                        while (a > 0 && !word(t[a - 1])) --a;
+                        while (a > 0 && word(t[a - 1])) --a;
+                        SendMessageW(f, EM_SETSEL, a, s);
+                    }
+                    SendMessageW(f, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L""));
+                    continue;
+                }
+                keys = true;  // arrows, Home/End, Delete... belong to the edit, not to dialog navigation
+            }
+        }
         if (!keys && IsDialogMessageW(h, &msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
@@ -223,6 +248,7 @@ bool MainWindow::OnCreate() {
 
     auto dash = std::make_unique<DashboardView>();
     auto an = std::make_unique<AnalyzerView>();
+    auto sv = std::make_unique<SearchView>();
     auto tm = std::make_unique<TreemapView>();
     auto lf = std::make_unique<LargeFilesView>();
     auto of = std::make_unique<LargeFilesView>(true);
@@ -232,18 +258,20 @@ bool MainWindow::OnCreate() {
     auto st = std::make_unique<SettingsView>();
     dash_ = dash.get();
     analyzer_ = an.get();
+    search_ = sv.get();
     treemap_ = tm.get();
     large_ = lf.get();
     temp_ = tf.get();
     pages_[0] = std::move(dash);
     pages_[1] = std::move(an);
-    pages_[2] = std::move(tm);
-    pages_[3] = std::move(lf);
-    pages_[4] = std::move(of);
-    pages_[5] = std::move(tf);
-    pages_[6] = std::move(cf);
-    pages_[7] = std::move(rb);
-    pages_[8] = std::move(st);
+    pages_[2] = std::move(sv);
+    pages_[3] = std::move(tm);
+    pages_[4] = std::move(lf);
+    pages_[5] = std::move(of);
+    pages_[6] = std::move(tf);
+    pages_[7] = std::move(cf);
+    pages_[8] = std::move(rb);
+    pages_[9] = std::move(st);
     for (auto& p : pages_) p->Create(hwnd_, this);
 
     SetStatus(L"No scan has been performed.");
@@ -283,6 +311,11 @@ void MainWindow::Layout() {
     for (auto& p : pages_)
         if (p) MoveWindow(p->hwnd(), navW, hdr, std::max(0, w - navW), std::max(0, h - hdr), TRUE);
     InvalidateRect(hwnd_, nullptr, TRUE);
+}
+
+void MainWindow::OpenSearch(const std::wstring& query) {
+    ShowPage(2);
+    search_->SetQuery(query);
 }
 
 void MainWindow::ShowPage(int idx) {
@@ -501,7 +534,7 @@ void MainWindow::ApplyTheme() {
     DwmSetWindowAttribute(hwnd_, 36 /*DWMWA_TEXT_COLOR*/, &txt, sizeof txt);
     DwmSetWindowAttribute(hwnd_, 34 /*DWMWA_BORDER_COLOR*/, &cap, sizeof cap);
     // dark context menus (undocumented uxtheme ordinals 135/136, present on Windows 10 1903+; skipped if missing)
-    static HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+    static HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);  // system copy only, never one next to the exe
     if (ux) {
         if (auto f = reinterpret_cast<int(WINAPI*)(int)>(GetProcAddress(ux, MAKEINTRESOURCEA(135)))) f(dark ? 2 : 3);
         if (auto g = reinterpret_cast<void(WINAPI*)()>(GetProcAddress(ux, MAKEINTRESOURCEA(136)))) g();

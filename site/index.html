@@ -57,7 +57,52 @@
     </div>
     <a id="dl-main2" class="btn primary big" href="https://github.com/shahriarmostafiz/storagescope/releases/latest">Download</a>
   </div>
-  <p class="meta"><a href="https://github.com/shahriarmostafiz/storagescope/releases" target="_blank" rel="noopener noreferrer">All releases on GitHub</a></p>
+  <p class="meta"><a href="https://github.com/shahriarmostafiz/storagescope/releases" target="_blank" rel="noopener noreferrer">All releases on GitHub</a> · <a href="#/run">Windows blocked it? See how to run it</a></p>
+</section>
+
+<section id="run" class="run wrap">
+  <h2>Windows says it won't run?</h2>
+  <p class="sub">StorageScope is new and not code-signed yet, so Windows SmartScreen may warn you the first time. The file is safe to run. You can check it first (see below).</p>
+  <ol class="steps">
+    <li>
+      <h3>1. Click "More info"</h3>
+      <p>When you see "Windows protected your PC", don't click Don't run. Click the <b>More info</b> link.</p>
+      <div class="win" role="img" aria-label="Illustration of the Windows SmartScreen dialog with the More info link highlighted">
+        <div class="win-bar">Windows protected your PC</div>
+        <div class="win-body">
+          <p>Microsoft Defender SmartScreen prevented an unrecognized app from starting. Running this app might put your PC at risk.</p>
+          <span class="win-link hot">More info</span>
+        </div>
+        <div class="win-foot"><span class="win-btn off">Don't run</span></div>
+      </div>
+    </li>
+    <li>
+      <h3>2. Click "Run anyway"</h3>
+      <p>A <b>Run anyway</b> button appears. Click it and StorageScope starts. Windows remembers your choice for this file.</p>
+      <div class="win" role="img" aria-label="Illustration of the SmartScreen dialog with the Run anyway button highlighted">
+        <div class="win-bar">Windows protected your PC</div>
+        <div class="win-body">
+          <p>App: <b>StorageScope.exe</b><br>Publisher: <b>Unknown publisher</b></p>
+        </div>
+        <div class="win-foot"><span class="win-btn hot">Run anyway</span><span class="win-btn off">Don't run</span></div>
+      </div>
+    </li>
+    <li>
+      <h3>No warning button? Unblock the file</h3>
+      <p>Right-click <code>StorageScope.exe</code>, choose <b>Properties</b>, tick <b>Unblock</b> at the bottom of the General tab, then click <b>OK</b>. Run it again.</p>
+      <div class="win" role="img" aria-label="Illustration of the file Properties dialog with the Unblock checkbox ticked">
+        <div class="win-bar">StorageScope.exe Properties</div>
+        <div class="win-body">
+          <p class="mono">Security: This file came from another computer and might be blocked to help protect this computer.</p>
+          <p><span class="win-check hot"></span> <b>Unblock</b></p>
+        </div>
+        <div class="win-foot"><span class="win-btn hot">OK</span><span class="win-btn off">Cancel</span></div>
+      </div>
+    </li>
+  </ol>
+  <h3>Want to check the file first?</h3>
+  <p class="meta">Compare the file with the SHA-256 shown in the download box. In PowerShell: <code>Get-FileHash StorageScope.exe</code>. The two values should match. The code is open on <a href="https://github.com/shahriarmostafiz/storagescope" target="_blank" rel="noopener noreferrer">GitHub</a>, and the app never sends your data anywhere.</p>
+  <p class="meta">Drawings above are illustrations of the Windows dialogs. Your Windows version may look slightly different.</p>
 </section>
 
 </div>
