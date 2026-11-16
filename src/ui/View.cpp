@@ -368,6 +368,13 @@ LRESULT CALLBACK ComboProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (!d) return CB_ERR;
             d->items.emplace_back(reinterpret_cast<const wchar_t*>(l));
             return static_cast<LRESULT>(d->items.size() - 1);
+        case CB_RESETCONTENT:
+            if (d) {
+                d->items.clear();
+                d->sel = -1;
+                InvalidateRect(h, nullptr, FALSE);
+            }
+            return 0;
         case CB_SETCURSEL:
             if (!d) return CB_ERR;
             d->sel = (static_cast<int>(w) >= 0 && static_cast<size_t>(w) < d->items.size()) ? static_cast<int>(w) : -1;

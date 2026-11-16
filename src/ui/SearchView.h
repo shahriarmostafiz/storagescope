@@ -34,12 +34,14 @@ private:
     void RemoveSelected(std::vector<std::wstring>& list, HWND lb);
     void FillList(std::vector<std::wstring>& list, HWND lb);
     void ShowPanels();
+    std::vector<ScanNode*> Roots() const;  // the scanned drives / folders (children of "This PC"), empty for a single-root scan
+    void FillDrives();
     std::vector<ScanNode*> Selected() const;
     std::wstring CellText(ScanNode* n, int col) const;
     std::wstring Text(HWND h) const;
     bool Checked(HWND h) const;
 
-    HWND lblWhere_ = nullptr, cbWhere_ = nullptr, lblKind_ = nullptr, cbKind_ = nullptr, edQuery_ = nullptr, bFilters_ = nullptr;
+    HWND lblWhere_ = nullptr, cbWhere_ = nullptr, cbDrive_ = nullptr, lblKind_ = nullptr, cbKind_ = nullptr, edQuery_ = nullptr, bFilters_ = nullptr;
     HWND lblScope_ = nullptr, lbScope_ = nullptr, bAddScope_ = nullptr, bRemScope_ = nullptr;
     HWND lblType_ = nullptr, cbType_ = nullptr, edInclude_ = nullptr, edExclude_ = nullptr, edMin_ = nullptr, edMax_ = nullptr, lblDate_ = nullptr,
          cbDate_ = nullptr, chkCase_ = nullptr, chkWord_ = nullptr, chkRegex_ = nullptr;
@@ -57,6 +59,7 @@ private:
     bool sortAsc_ = true;
     int lastW_ = 0, lastH_ = 0;
     bool barShown_ = false;
+    std::wstring drive_;  // chosen drive root path ("" = all drives); not saved: the scan may differ next time
     bool loading_ = true;  // controls are being filled: do not treat their changes as the user's
 };
 

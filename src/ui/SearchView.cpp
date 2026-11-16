@@ -16,7 +16,7 @@ namespace ss {
 namespace {
 
 enum {
-    ID_WHERE = 1, ID_KIND, ID_QUERY, ID_FILTERS, ID_SCOPELIST, ID_ADDSCOPE, ID_REMSCOPE, ID_TYPE, ID_INCLUDE, ID_EXCLUDE, ID_MIN, ID_MAX, ID_DATE,
+    ID_WHERE = 1, ID_DRIVE, ID_KIND, ID_QUERY, ID_FILTERS, ID_SCOPELIST, ID_ADDSCOPE, ID_REMSCOPE, ID_TYPE, ID_INCLUDE, ID_EXCLUDE, ID_MIN, ID_MAX, ID_DATE,
     ID_CASE, ID_WORD, ID_REGEX, ID_SKIPLIST, ID_ADDSKIP, ID_REMSKIP, ID_LIST, ID_INFO, ID_EMPTY, ID_NOTE, ID_OPEN, ID_BASKET, ID_RECYCLE, ID_PERM
 };
 enum Col { C_NAME, C_SIZE, C_TYPE, C_LOC, C_MOD, C_COUNT };
@@ -89,6 +89,9 @@ void SearchView::OnCreate() {
     lblWhere_ = Make(L"STATIC", L"Search in:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbWhere_ = Make(L"SSCombo", L"Search in", WS_TABSTOP, ID_WHERE);
     for (const wchar_t* s : {L"Whole system", L"Selected folders"}) SendMessageW(cbWhere_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
+    cbDrive_ = Make(L"SSCombo", L"Drive", WS_TABSTOP, ID_DRIVE);
+    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
+    SendMessageW(cbDrive_, CB_SETCURSEL, 0, 0);
     lblKind_ = Make(L"STATIC", L"Show:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbKind_ = Make(L"SSCombo", L"Show", WS_TABSTOP, ID_KIND);
     for (const wchar_t* s : {L"Files and folders", L"Files only", L"Folders only"}) SendMessageW(cbKind_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
@@ -192,8 +195,30 @@ void SearchView::SaveChoices() {
     s.searchSkip = skip_;
 }
 
+std::vector<ScanNode*> SearchView::Roots() const {
+    std::vector<ScanNode*> out;
+    ScanResult* sc = mw_->scan();
+    if (sc && sc->root && sc->root->type == NodeType::Virtual && sc->root->dir)
+        for (auto& c : sc->root->dir->children)
+            if (!c.removed && c.scanRoot) out.push_back(&c);
+    return out;
+}
+
+void SearchView::FillDrives() {
+    SendMessageW(cbDrive_, CB_RESETCONTENT, 0, 0);
+    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
+    int pick = 0;
+    for (ScanNode* r : Roots()) {
+        int i = static_cast<int>(SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(DisplayName(r).c_str())));
+        if (!drive_.empty() && path::EqualsNoCase(r->name, drive_)) pick = i;
+    }
+    SendMessageW(cbDrive_, CB_SETCURSEL, pick, 0);
+    if (!pick) drive_.clear();
+}
+
 void SearchView::ShowPanels() {
     bool folders = SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0) == 1;
+    ShowWindow(cbDrive_, folders ? SW_HIDE : SW_SHOW);
     for (HWND h : {lblScope_, lbScope_, bAddScope_, bRemScope_}) ShowWindow(h, folders ? SW_SHOW : SW_HIDE);
     for (HWND h : {lblType_, cbType_, edInclude_, edExclude_, edMin_, edMax_, lblDate_, cbDate_, chkCase_, chkWord_, chkRegex_, lblSkip_, lbSkip_, bAddSkip_, bRemSkip_})
         ShowWindow(h, advanced_ ? SW_SHOW : SW_HIDE);
@@ -234,7 +259,8 @@ void SearchView::Layout(int w, int h) {
         y += lh + gap;
     };
 
-    group({{lblWhere_, 80}, {cbWhere_, 190}});
+    if (folders) group({{lblWhere_, 80}, {cbWhere_, 190}});
+    else group({{lblWhere_, 80}, {cbWhere_, 190}, {cbDrive_, 140}});
     group({{lblKind_, 50}, {cbKind_, 170}});
     y += ch + gap;
     x = m;
@@ -351,6 +377,7 @@ void SearchView::Run() {
         if (dirty_ || index_.Empty()) {
             index_.Build(sc->root.get());
             dirty_ = false;
+            FillDrives();
         }
         const Settings& st = mw_->settings();
         SearchSpec sp;
@@ -394,6 +421,9 @@ void SearchView::Run() {
                 if (const ScanNode* n = FindNodeByPath(sc->root.get(), p)) sp.scopes.push_back(n);
                 else ++missing;
             }
+        if (!folders && !drive_.empty())
+            for (ScanNode* r : Roots())
+                if (path::EqualsNoCase(r->name, drive_)) sp.scopes.push_back(r);
         for (const auto& p : skip_)
             if (const ScanNode* n = FindNodeByPath(sc->root.get(), p)) sp.excluded.push_back(n);
 
@@ -603,6 +633,11 @@ LRESULT SearchView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             } else if (code == EN_CHANGE && (id == ID_QUERY || id == ID_INCLUDE || id == ID_EXCLUDE || id == ID_MIN || id == ID_MAX)) {
                 if (!loading_) rerun();
             } else if (code == CBN_SELCHANGE) {
+                if (id == ID_DRIVE) {
+                    int i = static_cast<int>(SendMessageW(cbDrive_, CB_GETCURSEL, 0, 0));
+                    auto roots = Roots();
+                    drive_ = i > 0 && i <= static_cast<int>(roots.size()) ? roots[static_cast<size_t>(i - 1)]->name : L"";
+                }
                 if (id == ID_WHERE) {
                     ShowPanels();
                     Layout(lastW_, lastH_);
