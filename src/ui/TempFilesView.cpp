@@ -11,7 +11,7 @@
 
 namespace ss {
 namespace {
-enum { ID_LIST = 1, ID_AGE, ID_SCAN, ID_CLEAN, ID_TOTAL, ID_RESULT, ID_NOTE };
+enum { ID_LIST = 1, ID_AGE, ID_SCAN, ID_CLEAN, ID_TOTAL, ID_RESULT, ID_NOTE, ID_SELALL };
 const uint32_t kAges[] = {24, 168, 720, 0};
 }  // namespace
 
@@ -28,6 +28,7 @@ void TempFilesView::OnCreate() {
         if (kAges[i] == mw_->settings().tempAgeHours) sel = i;
     SendMessageW(cbAge_, CB_SETCURSEL, static_cast<WPARAM>(sel), 0);
     bClean_ = Make(L"BUTTON", L"Clean Selected", WS_TABSTOP | BS_OWNERDRAW | WS_DISABLED, ID_CLEAN);
+    bSelAll_ = Make(L"BUTTON", L"Select all", WS_TABSTOP | BS_OWNERDRAW | WS_DISABLED, ID_SELALL);
     total_ = Make(L"STATIC", L"Recoverable space: not scanned yet", SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX, ID_TOTAL);
 
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, ID_LIST);
@@ -78,7 +79,7 @@ void TempFilesView::Layout(int w, int h) {
     };
     group({{bScan_, 220, 0, bh}});
     group({{lblAge_, 100, 0, bh}, {cbAge_, 230, -mw_->S(1), mw_->S(200)}});
-    group({{bClean_, 170, 0, bh}});
+    group({{bClean_, 170, 0, bh}, {bSelAll_, 150, 0, bh}});
     MoveWindow(total_, m, y + bh + mw_->S(8), w - 2 * m, mw_->S(26), TRUE);
     int top = y + bh + mw_->S(40);
     int ic = mw_->S(kInfoIconSize), noteH = ic + mw_->S(12);  // the safety note is the tooltip of one "i" icon at the bottom
@@ -151,6 +152,18 @@ void TempFilesView::UpdateButtons() {
         }
     }
     EnableWindow(bClean_, idle && any);
+    {
+        size_t n = 0, ticked = 0;
+        std::lock_guard lk(m_);
+        for (size_t i = 0; i < cats_.size(); ++i)
+            if (cats_[i].scanned) {
+                ++n;
+                ticked += Checked(static_cast<int>(i)) ? 1 : 0;
+            }
+        SetWindowTextW(bSelAll_, n && ticked == n ? L"Clear selection" : L"Select all");
+        EnableWindow(bSelAll_, idle && n > 0);
+        InvalidateRect(bSelAll_, nullptr, TRUE);
+    }
     if (scanned && !filling_) SetWindowTextW(total_, (L"Recoverable space: " + FormatBytes(total)).c_str());
 }
 
@@ -284,6 +297,21 @@ LRESULT TempFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             switch (LOWORD(w)) {
                 case ID_SCAN: StartScan(); break;
                 case ID_CLEAN: StartClean(); break;
+                case ID_SELALL: {
+                    std::vector<int> rows;
+                    bool all = true;
+                    {
+                        std::lock_guard lk(m_);
+                        for (size_t i = 0; i < cats_.size(); ++i)
+                            if (cats_[i].scanned) {
+                                rows.push_back(static_cast<int>(i));
+                                all = all && Checked(static_cast<int>(i));
+                            }
+                    }
+                    for (int i : rows) ListView_SetCheckState(list_, i, !all);  // each change reaches UpdateButtons()
+                    InvalidateRect(list_, nullptr, FALSE);
+                    break;
+                }
                 case ID_AGE:
                     if (HIWORD(w) == CBN_SELCHANGE) {
                         for (auto& r : cats_) r.scanned = false;  // results no longer match the filter

@@ -35,7 +35,7 @@ private:
     bool Checked(int i) const;
 
     HWND list_ = nullptr, cbAge_ = nullptr, lblAge_ = nullptr, bScan_ = nullptr, bClean_ = nullptr, total_ = nullptr, result_ = nullptr,
-         note_ = nullptr;
+         note_ = nullptr, bSelAll_ = nullptr;
     std::vector<Row> cats_;
     std::mutex m_;
     TempCleanResult lastClean_;

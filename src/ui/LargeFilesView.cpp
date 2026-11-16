@@ -17,7 +17,7 @@
 namespace ss {
 namespace {
 
-enum { ID_SIZE = 1, ID_CUSTOM, ID_TYPE, ID_LIST, ID_INFO, ID_EMPTY, ID_OPEN, ID_RECYCLE, ID_PERM, ID_NOTE, ID_SORT, ID_DIR, ID_REFRESH, ID_STALE, ID_BASKET };
+enum { ID_SIZE = 1, ID_CUSTOM, ID_TYPE, ID_LIST, ID_INFO, ID_EMPTY, ID_OPEN, ID_RECYCLE, ID_PERM, ID_NOTE, ID_SORT, ID_DIR, ID_REFRESH, ID_STALE, ID_BASKET, ID_SELALL };
 enum Col { C_NAME, C_SIZE, C_TYPE, C_LOC, C_MOD, C_COUNT };
 
 std::wstring LowerExt(const ScanNode* n) {
@@ -56,6 +56,7 @@ void LargeFilesView::OnCreate() {
         SendMessageW(cbStale_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
     SendMessageW(cbStale_, CB_SETCURSEL, old_ ? mw_->settings().oldAge : 0, 0);
     bBasket_ = Make(L"BUTTON", L"Add to Basket", WS_TABSTOP | BS_OWNERDRAW, ID_BASKET);
+    bSelAll_ = Make(L"BUTTON", L"Select all", WS_TABSTOP | BS_OWNERDRAW, ID_SELALL);
 
     list_ = Make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, ID_LIST);
     SetWindowTheme(list_, L"Explorer", nullptr);
@@ -115,8 +116,10 @@ void LargeFilesView::Layout(int w, int h) {
     group({{lblStale_, old_ ? 130 : 112}, {cbStale_, 230}});
     group({{bRefresh_, 100}});
     y += ch + gap;
-    MoveWindow(info_, m, y, w - 2 * m, mw_->S(24), TRUE);
-    int top = y + mw_->S(28);
+    int sw = mw_->S(150);  // "Select all" sits at the right end of the result line
+    MoveWindow(info_, m, y, std::max(mw_->S(100), w - 2 * m - sw - gap), mw_->S(24), TRUE);
+    MoveWindow(bSelAll_, w - m - sw, y - mw_->S(2), sw, mw_->S(28), TRUE);
+    int top = y + mw_->S(32);
     // Action buttons appear only while something is selected; they wrap in a narrow window.
     const FlowItem btns[] = {{bOpen_, mw_->S(170)}, {bBasket_, mw_->S(150)}, {bRecycle_, mw_->S(190)}, {bPerm_, mw_->S(180)}};
     int rows = FlowButtons(btns, 4, m, w, 0, bh, gap, false, false);
@@ -321,6 +324,10 @@ std::vector<ScanNode*> LargeFilesView::Selected() const {
 }
 
 void LargeFilesView::UpdateButtons() {
+    bool all = !rows_.empty() && checked_.size() == rows_.size();
+    SetWindowTextW(bSelAll_, all ? L"Clear selection" : L"Select all");
+    EnableWindow(bSelAll_, !rows_.empty());
+    InvalidateRect(bSelAll_, nullptr, TRUE);
     auto sel = Selected();
     bool ok = !sel.empty() && !mw_->busy();
     if (ok && sel.size() <= 300)
@@ -337,7 +344,16 @@ void LargeFilesView::UpdateButtons() {
     EnableWindow(bBasket_, ok);
 }
 
+void LargeFilesView::ToggleAll() {
+    bool all = !rows_.empty() && checked_.size() == rows_.size();
+    checked_.clear();
+    if (!all) checked_.insert(rows_.begin(), rows_.end());
+    InvalidateRect(list_, nullptr, FALSE);
+    UpdateButtons();
+}
+
 void LargeFilesView::Act(int id) {
+    if (id == ID_SELALL) return ToggleAll();
     if (id == ID_REFRESH) {
         mw_->RefreshNodes(rows_);  // verify the listed files and re-list their folders; no full rescan (use the Dashboard for that)
         return;

@@ -30,6 +30,7 @@ private:
     void UpdateButtons();
     void UpdateRemove();
     void Act(int id);
+    void ToggleAll();
     void AddFolders(std::vector<std::wstring>& list, HWND lb, const wchar_t* title);
     void RemoveSelected(std::vector<std::wstring>& list, HWND lb);
     void FillList(std::vector<std::wstring>& list, HWND lb);
@@ -47,7 +48,7 @@ private:
          cbDate_ = nullptr, chkCase_ = nullptr, chkWord_ = nullptr, chkRegex_ = nullptr;
     HWND lblSkip_ = nullptr, lbSkip_ = nullptr, bAddSkip_ = nullptr, bRemSkip_ = nullptr;
     HWND list_ = nullptr, info_ = nullptr, empty_ = nullptr, note_ = nullptr;
-    HWND bOpen_ = nullptr, bBasket_ = nullptr, bRecycle_ = nullptr, bPerm_ = nullptr;
+    HWND bOpen_ = nullptr, bBasket_ = nullptr, bSelAll_ = nullptr, bRecycle_ = nullptr, bPerm_ = nullptr;
 
     SearchIndex index_;
     bool dirty_ = true;      // the index (and results) no longer match the tree
