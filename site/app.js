@@ -99,6 +99,30 @@
     sel.disabled = rels.length < 2;
     sel.onchange = function () { select(parseInt(sel.value, 10)); };
     select(0);
+    updateCount(list);
+  }
+
+  // Download counter: sum of every release's .exe downloads. Hidden until it reaches 100, then shown and kept live
+  // (refreshed every 2 minutes while the tab is open, animated when it grows).
+  var MIN_COUNT = 100, shown = 0;
+  function total(list) {
+    var n = 0;
+    list.forEach(function (r) { (r.assets || []).forEach(function (a) { if (/\.exe$/i.test(a.name)) n += a.download_count || 0; }); });
+    return n;
+  }
+  function updateCount(list) {
+    var n = total(list), box = $("dl-count"), out = $("dl-count-n");
+    if (n < MIN_COUNT) { box.hidden = true; return; }
+    box.hidden = false;
+    var from = shown || n, start = null;
+    shown = n;
+    if (from === n || matchMedia("(prefers-reduced-motion: reduce)").matches) { text(out, n.toLocaleString()); return; }
+    (function step(ts) {
+      if (start === null) start = ts;
+      var p = Math.min(1, (ts - start) / 900);
+      text(out, Math.round(from + (n - from) * p).toLocaleString());
+      if (p < 1 && shown === n) requestAnimationFrame(step);
+    })(performance.now());
   }
 
   function fail(msg) {
@@ -106,6 +130,15 @@
     text($("dl-ver"), "Latest release");
     text($("dl-info"), msg || "Couldn't load the release list. Use the GitHub releases link below.");
   }
+
+  // Live count: ask again every 2 minutes while the tab is visible (30 requests an hour, under the 60 an unauthenticated visitor gets).
+  setInterval(function () {
+    if (document.hidden) return;
+    fetch("https://api.github.com/repos/" + REPO + "/releases?per_page=30", { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (d) { try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d: d })); } catch (e) {} updateCount(d); })
+      .catch(function () {});
+  }, 120000);
 
   // Cache for 10 minutes: the unauthenticated GitHub API allows 60 requests per hour per visitor.
   var key = "ss-releases", cached = null;

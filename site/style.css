@@ -82,6 +82,10 @@ img{display:block}
 
 /* download */
 .dl-box{display:flex;justify-content:space-between;align-items:center;gap:20px;border-block:1px solid var(--line);padding:28px 0;margin-top:1.6rem}
+.dl-count{display:flex;align-items:center;gap:8px;font-size:1rem;color:var(--text)}
+.dl-count .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.dl-count .dot{animation:none}}
 .dl-ver{font-size:1.25rem;font-weight:600;margin:0}
 .download h3{margin-top:2.4rem}
 .older{list-style:none;padding:0;margin:0 0 1rem}
