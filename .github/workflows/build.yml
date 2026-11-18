@@ -94,8 +94,10 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
-        run: gh release upload "$TAG" mac/build/StorageScope-mac.dmg mac/build/StorageScope-mac.dmg.sha256 --clobber
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${TAG_IN:-$(gh release view --json tagName -q .tagName)}"
+          gh release upload "$TAG" mac/build/StorageScope-mac.dmg mac/build/StorageScope-mac.dmg.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG_IN: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
