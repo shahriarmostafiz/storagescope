@@ -70,3 +70,33 @@ jobs:
           github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signed
+
+  # Mac app: built after the Windows job so the release already exists. Unsigned (ad-hoc), so users right-click > Open once.
+  mac:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        working-directory: mac
+        run: swift test
+
+      - name: Build app
+        working-directory: mac
+        run: VERSION="${GITHUB_REF_NAME#v}" bash build-app.sh
+
+      - name: Make dmg and checksum
+        working-directory: mac/build
+        run: |
+          mkdir dmg
+          cp -R StorageScope.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname StorageScope -srcfolder dmg -ov -format UDZO StorageScope-mac.dmg
+          shasum -a 256 StorageScope-mac.dmg > StorageScope-mac.dmg.sha256
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: gh release upload "${{ github.ref_name }}" mac/build/StorageScope-mac.dmg mac/build/StorageScope-mac.dmg.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}

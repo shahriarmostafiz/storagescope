@@ -49,7 +49,12 @@
 
   function mb(n) { return (n / 1048576).toFixed(2) + " MB"; }
   function day(s) { return new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); }
-  function exe(rel) { return (rel.assets || []).filter(function (a) { return /\.exe$/i.test(a.name); })[0]; }
+  // Mac visitors get the .dmg, everyone else the .exe; the other platform stays one click away.
+  var isMac = /Mac/i.test(navigator.platform || "") && !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  function find(rel, re) { return (rel.assets || []).filter(function (a) { return re.test(a.name); })[0]; }
+  function exe(rel) { return find(rel, isMac ? /\.dmg$/i : /\.exe$/i); }
+  function otherAsset(rel) { return find(rel, isMac ? /\.exe$/i : /\.dmg$/i); }
+  var OS = isMac ? "macOS 13 or newer, Apple Silicon and Intel" : "Windows 10 and 11, 64-bit, portable";
   function $(id) { return document.getElementById(id); }
   function text(el, s) { el.textContent = s; }
   function show(el, s) { if (s) { text(el, s); el.hidden = false; } else el.hidden = true; }
@@ -65,13 +70,16 @@
 
   var rels = [];
   function select(i) {
-    var r = rels[i], a = exe(r), m = /[a-f0-9]{64}/i.exec(r.body || "");
+    var r = rels[i], a = exe(r), m = !isMac && /[a-f0-9]{64}/i.exec(r.body || "");
     $("dl-main2").href = a.browser_download_url;
     $("dl-main2").textContent = "Download " + r.tag_name;
     text($("dl-ver"), r.name || r.tag_name);
-    text($("dl-info"), day(r.published_at) + " · " + mb(a.size) + " · Windows 10 and 11, 64-bit, portable");
+    text($("dl-info"), day(r.published_at) + " · " + mb(a.size) + " · " + OS);
+    var oa = otherAsset(r);
+    $("dl-other").href = oa ? oa.browser_download_url : "https://github.com/" + REPO + "/releases";
+    text($("dl-other"), isMac ? "Need Windows? Download the .exe" : "Need a Mac? Download the .dmg");
     show($("dl-sha"), m ? "SHA-256: " + m[0] : "");
-    var sa = (r.assets || []).filter(function (x) { return /\.sha256$/i.test(x.name); })[0];
+    var sa = (r.assets || []).filter(function (x) { return /\.sha256$/i.test(x.name) && x.name.indexOf(isMac ? "StorageScope-mac" : "StorageScope.exe") === 0; })[0];
     if (!m && sa) {
       fetch(sa.browser_download_url).then(function (x) { return x.text(); }).then(function (t) {
         var h = /[a-f0-9]{64}/i.exec(t);
@@ -82,13 +90,21 @@
     show($("dl-old"), i > 0 ? "This is not the latest version. Newer releases may include fixes." : "");
   }
 
+  if (isMac) {
+    $("dl-main").textContent = "Download for Mac";
+    $("hero-eyebrow").textContent = "Free and open source for Mac";
+    $("hero-lead").textContent = "A small, private disk analyzer for Mac. No telemetry.";
+    $("dl-meta").textContent = "macOS 13 or newer. Apple Silicon and Intel.";
+    $("dl-info").textContent = "macOS 13 or newer. Open the dmg, drag StorageScope to Applications, then right-click it and choose Open the first time.";
+  }
+
   function render(list) {
     // Stable releases with an exe attached, newest first (the API returns them in that order).
     rels = list.filter(function (r) { return !r.draft && !r.prerelease && exe(r); }).slice(0, 15);
     if (!rels.length) { fail("No release is published yet. Check back soon, or see the GitHub releases page."); return; }
     var latest = rels[0], la = exe(latest);
     $("dl-main").href = la.browser_download_url;
-    text($("dl-meta"), "Version " + latest.tag_name + " · " + mb(la.size) + " · Windows 10 and 11, 64-bit");
+    text($("dl-meta"), "Version " + latest.tag_name + " · " + mb(la.size) + " · " + OS);
     var sel = $("ver");
     sel.textContent = "";
     rels.forEach(function (r, i) {
@@ -107,7 +123,7 @@
   var MIN_COUNT = 100, shown = 0;
   function total(list) {
     var n = 0;
-    list.forEach(function (r) { (r.assets || []).forEach(function (a) { if (/\.exe$/i.test(a.name)) n += a.download_count || 0; }); });
+    list.forEach(function (r) { (r.assets || []).forEach(function (a) { if (/\.(exe|dmg)$/i.test(a.name)) n += a.download_count || 0; }); });
     return n;
   }
   function updateCount(list) {
