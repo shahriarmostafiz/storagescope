@@ -35,5 +35,13 @@ PLIST
 
 # Ad-hoc signature so the app runs on this Mac. To share it, sign with a Developer ID and notarize (see README).
 codesign --force --deep --sign - "$APP"
-echo "Built $APP"
-echo "Open it with:  open $APP"
+# Disk image: the app plus an Applications shortcut to drag it onto.
+rm -rf build/dmg build/StorageScope-mac.dmg
+mkdir build/dmg
+cp -R "$APP" build/dmg/
+ln -s /Applications build/dmg/Applications
+hdiutil create -volname StorageScope -srcfolder build/dmg -ov -format UDZO build/StorageScope-mac.dmg
+rm -rf build/dmg
+(cd build && shasum -a 256 StorageScope-mac.dmg > StorageScope-mac.dmg.sha256)
+echo "Built $APP and build/StorageScope-mac.dmg"
+echo "Open it with:  open build/StorageScope-mac.dmg"

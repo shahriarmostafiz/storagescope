@@ -6,6 +6,10 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the Mac dmg to (optional)
+        required: false
 
 permissions:
   contents: write  # needed to attach files to a GitHub Release on tag builds
@@ -72,9 +76,10 @@ jobs:
           output-artifact-directory: signed
 
   # Mac app: built after the Windows job so the release already exists. Unsigned (ad-hoc), so users right-click > Open once.
+  # Manual run: pick the tag to attach the dmg to an existing release (for example one whose Mac job failed).
   mac:
     needs: build
-    runs-on: macos-14
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -82,21 +87,15 @@ jobs:
         working-directory: mac
         run: swift test
 
-      - name: Build app
+      - name: Build app and dmg
         working-directory: mac
-        run: VERSION="${GITHUB_REF_NAME#v}" bash build-app.sh
-
-      - name: Make dmg and checksum
-        working-directory: mac/build
-        run: |
-          mkdir dmg
-          cp -R StorageScope.app dmg/
-          ln -s /Applications dmg/Applications
-          hdiutil create -volname StorageScope -srcfolder dmg -ov -format UDZO StorageScope-mac.dmg
-          shasum -a 256 StorageScope-mac.dmg > StorageScope-mac.dmg.sha256
+        run: VERSION="$(echo "${TAG#v}")" bash build-app.sh
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: gh release upload "${{ github.ref_name }}" mac/build/StorageScope-mac.dmg mac/build/StorageScope-mac.dmg.sha256
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        run: gh release upload "$TAG" mac/build/StorageScope-mac.dmg mac/build/StorageScope-mac.dmg.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
