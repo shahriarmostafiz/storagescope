@@ -39,15 +39,34 @@ struct ScanNode {
 
 struct DirData {
     std::vector<ScanNode> children;  // fixed after the directory has been enumerated
+    // True from the moment a folder is created by a running scan until its listing has been published into `children`
+    // (release store). Readers that may run during a scan must go through KidsOf(); it is false everywhere else.
+    std::atomic<bool> building{false};
     // Scanner bookkeeping (valid during the scan only)
     std::atomic<uint32_t> pending{0};
     std::atomic<uint64_t> size{0}, allocated{0};
     std::atomic<uint32_t> files{0}, dirs{0};
 };
 
+// The children of `n` that are safe to read while a scan is still running: nothing until the folder's listing is published.
+// (After a scan, and for trees that were never scanned live, this is simply n.dir->children.)
+const std::vector<ScanNode>& KidsOf(const ScanNode& n);
+// True while the scan has not finished listing this folder.
+bool IsBuilding(const ScanNode& n);
+// Totals of folders that a running scan has not finished are added to by scanner threads: pages that browse a live scan read them
+// with these (a plain read of a number being written is a data race, even if it never tears on x64).
+inline uint64_t LiveSize(const ScanNode& n) { return std::atomic_ref<uint64_t>(const_cast<uint64_t&>(n.size)).load(std::memory_order_relaxed); }
+inline uint64_t LiveAllocated(const ScanNode& n) { return std::atomic_ref<uint64_t>(const_cast<uint64_t&>(n.allocated)).load(std::memory_order_relaxed); }
+inline uint32_t LiveFiles(const ScanNode& n) { return std::atomic_ref<uint32_t>(const_cast<uint32_t&>(n.files)).load(std::memory_order_relaxed); }
+inline uint32_t LiveDirs(const ScanNode& n) { return std::atomic_ref<uint32_t>(const_cast<uint32_t&>(n.dirs)).load(std::memory_order_relaxed); }
+
 struct ScanResult {
     std::unique_ptr<ScanNode> root;  // Virtual "This PC" for multi-root scans, else the scan root
     uint64_t files = 0, dirs = 0, bytes = 0;
+    uint64_t allocated = 0;        // size on disk of everything scanned
+    uint64_t expected = 0;         // used space of the scanned drives (0 = unknown, e.g. a folder scan)
+    bool slowDisk = false;         // a hard-drive-like disk was detected: the scan ran with one thread per disk
+    bool estimatedSizes = false;   // exact sizes of compressed/sparse files were skipped after the time budget (estimated instead)
     uint64_t errors = 0;           // directories that could not be read
     uint64_t skippedReparse = 0;   // directory reparse points not followed
     uint64_t elapsedMs = 0;

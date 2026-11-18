@@ -137,6 +137,10 @@ int MainWindow::Run(HINSTANCE hi, int nShow) {
             HWND f = GetFocus();
             if (f && GetClassNameW(f, cls, 8) && !_wcsicmp(cls, L"Edit")) {
                 // plain edits have no Ctrl+Backspace (they insert a block character): delete the previous word ourselves
+                if (msg.wParam == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {  // a plain edit has no Ctrl+A
+                    SendMessageW(f, EM_SETSEL, 0, -1);
+                    continue;
+                }
                 if (msg.wParam == VK_BACK && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     DWORD s = 0, e = 0;
                     SendMessageW(f, EM_GETSEL, reinterpret_cast<WPARAM>(&s), reinterpret_cast<LPARAM>(&e));
@@ -164,6 +168,7 @@ int MainWindow::Run(HINSTANCE hi, int nShow) {
 }
 
 MainWindow::~MainWindow() {
+    if (saveThread_.joinable()) saveThread_.join();  // never leave a half-written saved scan behind
     scanThread_.request_stop();
     valThread_.request_stop();
     watcher_.Stop();
@@ -235,7 +240,7 @@ bool MainWindow::OnCreate() {
                             nullptr, nullptr);
     stop_ = CreateWindowExW(0, L"BUTTON", L"Stop Scan", WS_CHILD | WS_TABSTOP | WS_DISABLED | BS_OWNERDRAW, 0, 0,
                             10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopId)), nullptr, nullptr);
-    details_ = CreateWindowExW(0, L"BUTTON", L"More info", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10, hwnd_,
+    details_ = CreateWindowExW(0, L"BUTTON", L"View more", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10, hwnd_,
                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailsId)), nullptr, nullptr);
     basketText_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_PATHELLIPSIS | SS_NOPREFIX | SS_CENTERIMAGE, 0, 0, 10, 10, hwnd_,
                                   nullptr, nullptr, nullptr);
@@ -483,7 +488,10 @@ void MainWindow::OnDropFiles(HDROP drop) {
     StartScan(dirs);
 }
 
-std::wstring MainWindow::EmptyStateText() const { return lastCanceled_ ? L"Scan canceled." : L"No scan has been performed."; }
+std::wstring MainWindow::EmptyStateText() const {
+    if (scanning_) return L"Scanning... this page fills in when the scan finishes. Storage Analyzer and Treemap can already be browsed.";
+    return lastCanceled_ ? L"Scan canceled." : L"No scan has been performed.";
+}
 
 void MainWindow::DataChanged() {
     UpdateBasketUi();
@@ -501,7 +509,7 @@ void MainWindow::SettingsChanged() {
             cleared_ = true;
         } else {
             cleared_ = false;
-            treeDirty_ = true;  // saved again on exit
+            treeDirty_ = true, ++treeRev_;  // saved again on exit
         }
     }
     if (!settings_.autoUpdate) {
@@ -609,6 +617,10 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
         }
     scanning_ = true;
     lastCanceled_ = false;
+    live_ = nullptr;
+    liveOn_ = false;
+    etaLastMs_ = etaLastAlloc_ = 0;
+    etaRate_ = 0;
     watcher_.Stop();  // a scan reads everything anyway; the watcher restarts when it finishes
     valThread_.request_stop();
     if (!refreshTarget_) lastRoots_ = roots;  // what the "Refresh" button on Large Files rescans
@@ -620,15 +632,23 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
     }
     Logger::Get().Info(L"scan start: roots=%zu", roots.size());
     unsigned fixedWorkers = settings_.workers;
-    // A finished full scan is saved on the scan thread, before the tree is shared with the UI (no locking needed).
-    bool save = settings_.rememberScan && !refreshTarget_, hidden = settings_.showHidden, appData = settings_.showAppData;
-    uint64_t ignHash = HashIgnored(settings_.ignored);
-    scanThread_ = std::jthread([this, roots, fixedWorkers, ignored = settings_.ignored, save, hidden, appData, ignHash](std::stop_token st) {
+    bool goLive = !refreshTarget_;  // a partial refresh is grafted into the finished tree: nothing to browse meanwhile
+    double scale = settings_.scanRatio / 1000.0;
+    scanThread_ = std::jthread([this, roots, fixedWorkers, goLive, scale, ignored = settings_.ignored](std::stop_token st) {
         DirectoryScanner ds;
         ScanOptions opt;
-        opt.workers = fixedWorkers ? fixedWorkers : DriveManager::AutoWorkers(roots);
+        opt.workers = fixedWorkers;  // 0 = the scanner decides per disk (one thread for a hard drive, several for an SSD)
         opt.ignored = ignored;
+        opt.expectedScale = scale;
         ScanCallbacks cb;
+        cb.onStarted = [this, goLive](ScanResult* r) {
+            if (!goLive) return;
+            {
+                std::lock_guard lk(shared_);
+                liveNew_ = r;
+            }
+            PostMessageW(hwnd_, WM_APP_SCAN_LIVE, 0, 0);
+        };
         cb.onProgress = [this](const ScanProgress& p) {
             {
                 std::lock_guard lk(shared_);
@@ -636,11 +656,7 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
             }
             PostMessageW(hwnd_, WM_APP_SCAN_PROGRESS, 0, 0);
         };
-        cb.onFinished = [this, &roots, save, hidden, appData, ignHash](std::unique_ptr<ScanResult> r) {
-            if (save && r && !r->canceled && r->root) {
-                ScanStats s = ComputeStats(r->root.get(), hidden, false, 10, appData);
-                SaveSnapshot(*r, roots, ignHash, s, SnapshotPath());
-            }
+        cb.onFinished = [this](std::unique_ptr<ScanResult> r) {
             {
                 std::lock_guard lk(shared_);
                 pending_ = std::move(r);
@@ -676,10 +692,14 @@ void MainWindow::UpdateScanUi() {
     ShowWindow(details_, s ? SW_SHOW : SW_HIDE);
     if (!s) {
         showDetails_ = false;
-        SetWindowTextW(details_, L"More info");
+        SetWindowTextW(details_, L"View more");
     }
-    if (s) SendMessageW(prog_, PBM_SETMARQUEE, TRUE, 30);  // indeterminate: total work is unknown up front
-    else SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
+    if (s) {  // starts indeterminate; OnScanProgress switches to a percentage once the drive's used space is known
+        SetWindowLongW(prog_, GWL_STYLE, GetWindowLongW(prog_, GWL_STYLE) | PBS_MARQUEE);
+        SendMessageW(prog_, PBM_SETMARQUEE, TRUE, 30);
+    } else {
+        SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
+    }
     for (auto& p : pages_)
         if (p) p->OnBusyChanged();
     if (nav_) Layout();  // the header grows while scanning
@@ -692,11 +712,45 @@ void MainWindow::OnScanProgress() {
         p = progress_;
     }
     if (!scanning_) return;
-    SetStatus(showDetails_ ? L"Scanning: " + p.currentPath : L"Scanning...");
-    SetWindowTextW(stats_, (L"Files: " + FormatCount(p.files) + L"     Folders: " + FormatCount(p.dirs) +
-                            L"     Size analyzed: " + FormatBytes(p.bytes) + L"     Elapsed: " + FormatDuration(p.elapsedMs) +
-                            (p.errors ? L"     Inaccessible: " + FormatCount(p.errors) : L""))
-                               .c_str());
+    std::wstring pct, left;
+    if (p.expected > 0) {  // whole drives: the used space is known, so there is a percentage and a time estimate
+        double frac = std::min(0.99, static_cast<double>(p.allocated) / static_cast<double>(p.expected));
+        LONG st = GetWindowLongW(prog_, GWL_STYLE);
+        if (st & PBS_MARQUEE) {
+            SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
+            SetWindowLongW(prog_, GWL_STYLE, st & ~PBS_MARQUEE);
+            SendMessageW(prog_, PBM_SETRANGE32, 0, 1000);
+        }
+        SendMessageW(prog_, PBM_SETPOS, static_cast<WPARAM>(frac * 1000), 0);
+        pct = L"Progress: " + std::to_wstring(static_cast<int>(frac * 100)) + L"%";
+        if (p.elapsedMs >= etaLastMs_ + 1000) {  // speed over the last stretch, smoothed (it changes a lot between big and small files)
+            double inst = static_cast<double>(p.allocated - std::min(p.allocated, etaLastAlloc_)) * 1000.0 / static_cast<double>(p.elapsedMs - etaLastMs_);
+            etaRate_ = etaRate_ <= 0 ? inst : etaRate_ * 0.8 + inst * 0.2;
+            etaLastMs_ = p.elapsedMs;
+            etaLastAlloc_ = p.allocated;
+        }
+        double avg = p.elapsedMs ? static_cast<double>(p.allocated) * 1000.0 / static_cast<double>(p.elapsedMs) : 0;
+        double rate = (avg + etaRate_) / 2;
+        if (frac >= 0.97) left = L"Almost done";
+        else if (p.elapsedMs < 6000 || rate <= 0 || frac < 0.01) left = L"Time left: estimating...";
+        else left = L"Time left: about " + FormatDuration(static_cast<uint64_t>((p.expected - p.allocated) / rate * 1000.0));
+    }
+    // Normally just the percentage and the time left. "View more" adds the folder being scanned and the running totals.
+    std::wstring line = p.expected > 0 ? pct + L"     " + left : L"Files found: " + FormatCount(p.files) + L"     Elapsed: " + FormatDuration(p.elapsedMs);
+    if (showDetails_) {
+        line += L"     |     Files: " + FormatCount(p.files) + L"     Folders: " + FormatCount(p.dirs) + L"     Size analyzed: " + FormatBytes(p.bytes) +
+                L"     Elapsed: " + FormatDuration(p.elapsedMs);
+        if (p.hdd) line += L"     |     Hard drive: one folder at a time, to keep it fast";
+        SetStatus(L"Scanning folder: " + p.currentPath);  // a folder, never a file
+    } else {
+        SetStatus(L"Scanning...");
+    }
+    SetWindowTextW(stats_, line.c_str());
+    if (liveOn_ && GetTickCount64() - lastLiveTick_ > 1000) {  // the page being browsed catches up with the scan about once a second
+        lastLiveTick_ = GetTickCount64();
+        if (page_ == 1) analyzer_->Reload();
+        else if (page_ == 3) treemap_->Reload();
+    }
 }
 
 void MainWindow::OnScanComplete() {
@@ -707,22 +761,30 @@ void MainWindow::OnScanComplete() {
     }
     if (scanThread_.joinable()) scanThread_.join();
     scanning_ = false;
+    bool wasLive = liveOn_;
+    liveOn_ = false;  // the tree is handed over below (or dropped): nothing may keep browsing it as "live"
+    live_ = nullptr;
+    {
+        std::lock_guard lk(shared_);
+        liveNew_ = nullptr;
+    }
     ScanNode* target = refreshTarget_;
     refreshTarget_ = nullptr;
     if (!r) {
         UpdateScanUi();
         return;
     }
-    Logger::Get().Info(L"scan end: canceled=%d files=%llu dirs=%llu bytes=%llu inaccessible=%llu reparse_skipped=%llu ms=%llu",
-                       r->canceled ? 1 : 0, r->files, r->dirs, r->bytes, r->errors, r->skippedReparse, r->elapsedMs);
+    Logger::Get().Info(L"scan end: canceled=%d files=%llu dirs=%llu bytes=%llu inaccessible=%llu reparse_skipped=%llu ms=%llu slow_disk=%d estimated_sizes=%d",
+                       r->canceled ? 1 : 0, r->files, r->dirs, r->bytes, r->errors, r->skippedReparse, r->elapsedMs, r->slowDisk ? 1 : 0, r->estimatedSizes ? 1 : 0);
     std::wstring stats = L"Files: " + FormatCount(r->files) + L"     Folders: " + FormatCount(r->dirs) +
-                         L"     Size analyzed: " + FormatBytes(r->bytes) + L"     Elapsed: " + FormatDuration(r->elapsedMs) +
-                         (r->errors ? L"     Inaccessible: " + FormatCount(r->errors) : L"");
+                         L"     Size analyzed: " + FormatBytes(r->bytes) + L"     Elapsed: " + FormatDuration(r->elapsedMs);
+    if (r->estimatedSizes) stats += L"     (sizes on disk of compressed files are estimated)";
     if (r->canceled) {
         lastCanceled_ = !scan_;
         SetStatus(L"Scan canceled.");
         SetWindowTextW(stats_, stats.c_str());
         Layout();
+        if (wasLive) DropReferences();  // pages were showing the half-scanned tree that is freed now
         FreeInBackground(std::move(r));
         UpdateScanUi();
         DataChanged();
@@ -739,7 +801,7 @@ void MainWindow::OnScanComplete() {
     updateFt_ = NowFileTime();
     if (target) {
         Graft(target, std::move(r));
-        treeDirty_ = true;  // the saved file predates this partial refresh: saved on exit
+        treeDirty_ = true, ++treeRev_;  // the saved file predates this partial refresh: saved on exit
         UpdateSummary();
         UpdateScanUi();
         DataChanged();
@@ -750,15 +812,66 @@ void MainWindow::OnScanComplete() {
     FreeInBackground(std::move(scan_));
     scan_ = std::move(r);
     dataFt_ = updateFt_;
-    treeDirty_ = false;  // already saved by the scan thread
+    treeDirty_ = true, ++treeRev_;  // until the saved scan has been written (StartSave below; also written on exit)
     cleared_ = false;
     settings_.lastFullScanDay = static_cast<uint32_t>(dataFt_ / kFileTimeDay);
+    if (scan_->expected > 0 && scan_->allocated > 0) {  // learn how much of a drive's "used space" is really files, for next time
+        double unscaled = static_cast<double>(scan_->expected) / (settings_.scanRatio / 1000.0);
+        double ratio = static_cast<double>(scan_->allocated) / unscaled;
+        settings_.scanRatio = static_cast<uint32_t>(std::clamp((settings_.scanRatio + ratio * 1000.0) / 2.0, 300.0, 1100.0));
+    }
     settings_.Save();
     UpdateSummary();
     UpdateScanUi();
     DataChanged();
-    BrowseTo(scan_->root.get());
+    if (!(wasLive && (page_ == 1 || page_ == 3))) BrowseTo(scan_->root.get());  // someone browsing the live scan stays where they are
     StartWatcher();
+    StartSave();
+}
+
+// Writes the saved scan in the background: the scan is already reported as finished. While it runs the app counts as busy, so nothing
+// can change the tree under the writer (deletes and new scans wait a few seconds).
+void MainWindow::StartSave() {
+    if (!settings_.rememberScan || !scan_ || saving_) return;
+    saving_ = true;
+    for (auto& p : pages_)
+        if (p) p->OnBusyChanged();
+    ScanResult* tree = scan_.get();
+    std::vector<std::wstring> roots = lastRoots_;
+    uint64_t ignHash = HashIgnored(settings_.ignored);
+    bool hidden = settings_.showHidden, appData = settings_.showAppData;
+    saveThread_ = std::jthread([this, tree, roots, ignHash, hidden, appData] {
+        ScanStats s = ComputeStats(tree->root.get(), hidden, false, 10, appData);
+        saveOk_ = SaveSnapshot(*tree, roots, ignHash, s, SnapshotPath());
+        PostMessageW(hwnd_, WM_APP_SAVE_DONE, 0, 0);
+    });
+}
+
+void MainWindow::OnSaveDone() {
+    if (saveThread_.joinable()) saveThread_.join();
+    saving_ = false;
+    if (saveOk_) treeDirty_ = false;
+    for (auto& p : pages_)
+        if (p) p->OnBusyChanged();
+    UpdateScanUi();
+    PumpSync();  // changes noticed while the file was being written
+}
+
+// The scan created its tree: the Storage Analyzer and Treemap switch to it and follow it while it fills.
+void MainWindow::OnScanLive() {
+    ScanResult* r = nullptr;
+    {
+        std::lock_guard lk(shared_);
+        r = liveNew_;
+        liveNew_ = nullptr;
+    }
+    if (!r || !scanning_) return;
+    live_ = r;
+    liveOn_ = true;
+    lastLiveTick_ = GetTickCount64();
+    DropReferences();  // the pages let go of the previous tree
+    analyzer_->Reload();
+    treemap_->Reload();
 }
 
 // Replaces the subtree below `t` with the freshly scanned one and fixes every ancestor's totals.
@@ -930,7 +1043,7 @@ void MainWindow::OnDeleteDone() {
     UpdateScanUi();
     dash_->Reload();                       // drive free space changes
     if (partial) RefreshFolder(partial);   // some files of a folder were deleted, others (locked) were not
-    treeDirty_ = true;
+    treeDirty_ = true, ++treeRev_;
     if (settings_.autoUpdate) SyncPaths(std::move(parents));
 }
 
@@ -949,7 +1062,7 @@ void MainWindow::IgnoreListChanged() {
     if (!busy() && scan_ && !settings_.ignored.empty()) {
         DropReferences();
         HideIgnoredInTree();
-        treeDirty_ = true;
+        treeDirty_ = true, ++treeRev_;
     }
     if (scan_ && !busy()) StartWatcher();  // new ignore list
     DataChanged();
@@ -1021,7 +1134,7 @@ LRESULT MainWindow::OnMessage(UINT m, WPARAM w, LPARAM l) {
             if (LOWORD(w) == kStopId) StopScan();
             else if (LOWORD(w) == kDetailsId) {
                 showDetails_ = !showDetails_;
-                SetWindowTextW(details_, showDetails_ ? L"Less info" : L"More info");
+                SetWindowTextW(details_, showDetails_ ? L"View less" : L"View more");
                 InvalidateRect(details_, nullptr, TRUE);
                 OnScanProgress();
             }
@@ -1036,6 +1149,12 @@ LRESULT MainWindow::OnMessage(UINT m, WPARAM w, LPARAM l) {
             return 0;
         case WM_APP_SCAN_PROGRESS:
             OnScanProgress();
+            return 0;
+        case WM_APP_SCAN_LIVE:
+            OnScanLive();
+            return 0;
+        case WM_APP_SAVE_DONE:
+            OnSaveDone();
             return 0;
         case WM_APP_SCAN_COMPLETE:
             OnScanComplete();

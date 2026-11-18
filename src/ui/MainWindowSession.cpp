@@ -82,6 +82,16 @@ void MainWindow::HideIgnoredInTree() {
     });
 }
 
+namespace {
+// Drive letters among `roots` that are spinning disks. Housekeeping that reads every folder (re-checking a saved scan, a surprise
+// full rescan) is skipped for them: on a hard drive that is tens of minutes of head movement the user did not ask for.
+bool HasHdd(const std::vector<std::wstring>& roots) {
+    for (const auto& r : roots)
+        if (r.size() >= 2 && r[1] == L':' && DriveManager::DetectMedia(static_cast<wchar_t>(towupper(r[0]))) == MediaKind::Hdd) return true;
+    return false;
+}
+}  // namespace
+
 void MainWindow::OnSnapshotLoaded() {
     if (loadThread_.joinable()) loadThread_.join();
     loading_ = false;
@@ -106,7 +116,7 @@ void MainWindow::OnSnapshotLoaded() {
     ++gen_;
     if (hash != HashIgnored(settings_.ignored)) {
         HideIgnoredInTree();
-        treeDirty_ = true;
+        treeDirty_ = true, ++treeRev_;
     }
     updateFt_ = 0;
     UpdateSummary();
@@ -114,7 +124,7 @@ void MainWindow::OnSnapshotLoaded() {
     DataChanged();
     StartWatcher();
     uint32_t today = static_cast<uint32_t>(NowFileTime() / kFileTimeDay);
-    if (settings_.autoUpdate && settings_.lastFullScanDay && today > settings_.lastFullScanDay + 7) {
+    if (settings_.autoUpdate && settings_.lastFullScanDay && today > settings_.lastFullScanDay + 7 && !HasHdd(lastRoots_)) {
         SetStatus(L"The saved scan is over a week old: scanning again...");
         StartScan(lastRoots_);
     } else if (settings_.autoUpdate) {
@@ -125,6 +135,11 @@ void MainWindow::OnSnapshotLoaded() {
 }
 
 void MainWindow::SaveScanNow() {
+    if (saveThread_.joinable()) {  // a save after a scan is still running: wait for it
+        saveThread_.join();
+        saving_ = false;
+        if (saveOk_) treeDirty_ = false;
+    }
     if (!settings_.rememberScan || cleared_ || !scan_ || !treeDirty_ || scanning_) return;
     SetStatus(L"Saving the scan...");
     UpdateWindow(status_);
@@ -147,6 +162,10 @@ void MainWindow::StartWatcher() {
 
 void MainWindow::StartRecheck() {
     if (!scan_ || !settings_.autoUpdate || busy()) return;
+    if (HasHdd(lastRoots_)) {  // see HasHdd: no background pass over every folder of a hard drive
+        SetStatus(L"Saved scan from " + FormatFileTime(dataFt_) + L". On a hard drive, changes made while the app was closed are not checked automatically: use Refresh to update.");
+        return;
+    }
     if (valThread_.joinable()) {
         valThread_.request_stop();
         valThread_.join();
@@ -154,8 +173,9 @@ void MainWindow::StartRecheck() {
     std::vector<DirCheck> checks;
     CollectDirChecks(scan_->root.get(), checks);
     SetStatus(L"Checking for changes since the last scan...");
-    valThread_ = std::jthread([this, checks = std::move(checks)](std::stop_token st) {
-        auto changed = ValidateDirs(checks, 4, st);
+    unsigned workers = std::min(4u, DriveManager::AutoWorkers(lastRoots_));  // a hard drive is checked by one thread
+    valThread_ = std::jthread([this, workers, checks = std::move(checks)](std::stop_token st) {
+        auto changed = ValidateDirs(checks, workers, st);
         if (st.stop_requested()) return;
         {
             std::lock_guard lk(shared_);
@@ -262,7 +282,7 @@ void MainWindow::OnSyncDone() {
     }
     updateFt_ = NowFileTime();
     if (total.Changed() || structural) {
-        treeDirty_ = true;
+        treeDirty_ = true, ++treeRev_;
         UpdateSummary();
         DataChanged();
         SetStatus(L"Auto-updated " + FormatFileTime(updateFt_));
@@ -284,13 +304,25 @@ void MainWindow::OnSyncTick() {
 
 void MainWindow::FirstRunScan() {
     std::vector<std::wstring> roots;
-    for (const auto& d : DriveManager::Enumerate())
-        if (d.IsFixed() && d.ready) roots.push_back(d.root);
+    bool skippedHdd = false;
+    for (const auto& d : DriveManager::Enumerate()) {
+        if (!d.IsFixed() || !d.ready) continue;
+        if (d.media == MediaKind::Hdd) {  // a hard drive can take half an hour: the user starts that one deliberately
+            skippedHdd = true;
+            continue;
+        }
+        roots.push_back(d.root);
+    }
     settings_.firstRunDone = true;
     settings_.Save();
-    if (roots.empty()) return;
+    if (roots.empty()) {
+        if (skippedHdd) Toast(L"Welcome! Pick a drive on the Dashboard and press Scan. Hard drives can take a while, so they are never scanned on their own.");
+        return;
+    }
     StartScan(roots);
-    if (scanning_) Toast(L"First launch: scanning all local drives once. You can stop it at any time.");
+    if (scanning_)
+        Toast(skippedHdd ? L"First launch: scanning your fast drives. Hard drives are left for you to start from the Dashboard."
+                         : L"First launch: scanning all local drives once. You can stop it at any time.");
 }
 
 int MainWindow::PruneMissing(const std::vector<ScanNode*>& nodes) {

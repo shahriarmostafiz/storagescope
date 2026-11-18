@@ -28,6 +28,7 @@
 #include "safety/PathProtectionService.h"
 #include "scanner/DirectoryScanner.h"
 #include "utils/FormatUtils.h"
+#include "ui/SelKeep.h"
 #include "utils/ListState.h"
 
 using namespace ss;
@@ -79,7 +80,27 @@ static bool MkJunction(const std::wstring& link, const std::wstring& target) {
     CloseHandle(pi.hProcess);
     return Exists(link);
 }
+// A run that crashed (or was killed) leaves its StorageScopeTest_<pid> folder behind: remove those from earlier runs.
+static void CleanStaleTestDirs() {
+    wchar_t t[MAX_PATH];
+    GetTempPathW(MAX_PATH, t);
+    std::wstring tmp = path::Canonicalize(t);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((tmp + L"\\StorageScopeTest_*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::wstring own = L"StorageScopeTest_" + std::to_wstring(GetCurrentProcessId());
+    std::vector<std::wstring> stale;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && own != fd.cFileName)
+            stale.push_back(tmp + L"\\" + fd.cFileName);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (stale.empty()) return;
+    PathProtectionService prot(PathProtectionService::ConfigFromEnvironment());
+    FileOperationService(prot).PermanentlyDelete(stale);  // the app's own safe deleter: protected paths are refused
+}
 static std::wstring TempBase() {
+    CleanStaleTestDirs();
     wchar_t t[MAX_PATH];
     GetTempPathW(MAX_PATH, t);
     std::wstring b = path::Canonicalize(t) + L"\\StorageScopeTest_" + std::to_wstring(GetCurrentProcessId());
@@ -152,6 +173,15 @@ static void TestProtection() {
     SECTION("PathProtectionService (fixed config, C:\\Users\\John)");
     auto p = FixedService();
     auto del = [&](const wchar_t* s) { return p.CanDelete(s) && p.CanPermanentlyDelete(s); };
+
+    // File lists (Large Files, Old Files, Search) leave out system locations only. The Users folder is undeletable, but the user's
+    // own files below it (Downloads, Documents...) must stay listed: they were once hidden because the folder itself is "Critical".
+    for (const wchar_t* s : {L"C:\\Windows", L"C:\\Windows\\System32", L"C:\\Program Files", L"C:\\Program Files (x86)\\App", L"C:\\$Recycle.Bin",
+                             L"C:\\System Volume Information", L"D:\\Recovery"})
+        CHECK(p.IsSystemLocation(s));
+    for (const wchar_t* s : {L"C:\\Users", L"C:\\Users\\John", L"C:\\Users\\John\\Downloads", L"C:\\Users\\Other\\Documents", L"C:\\ProgramData",
+                             L"C:\\Projects", L"D:\\Windows", L"D:\\", L"C:\\"})
+        CHECK(!p.IsSystemLocation(s));
 
     // Critical Windows locations
     for (const wchar_t* s : {L"C:\\Windows", L"C:\\Windows\\System32", L"C:\\Windows\\SysWOW64", L"C:\\Windows\\WinSxS",
@@ -407,6 +437,110 @@ static ScanNode* AddNode(ScanNode* parent, const wchar_t* name, NodeType t, uint
     return &parent->dir->children.back();
 }
 
+static void TestLiveScan(const std::wstring& base) {
+    SECTION("Live scan: tree is browsable while it fills, totals are exact at the end");
+    std::wstring root = base + L"\\live";
+    MkDirs(root + L"\\a\\b");
+    MkDirs(root + L"\\c");
+    MkFile(root + L"\\a\\x.bin", 5000);
+    MkFile(root + L"\\a\\b\\y.bin", 7000);
+    MkFile(root + L"\\c\\z.bin", 300);
+    DirectoryScanner ds;
+    ScanResult* started = nullptr;
+    bool emptyAtStart = false;
+    std::unique_ptr<ScanResult> out;
+    ScanCallbacks cb;
+    cb.onStarted = [&](ScanResult* r) {
+        started = r;
+        emptyAtStart = IsBuilding(*r->root) && KidsOf(*r->root).empty();  // nothing is readable before the folder is listed
+    };
+    cb.onFinished = [&](std::unique_ptr<ScanResult> r) { out = std::move(r); };
+    ds.Scan({root}, ScanOptions{4}, cb, {});
+    CHECK(out && started == out.get() && emptyAtStart);
+    CHECK(out && !IsBuilding(*out->root) && KidsOf(*out->root).size() == 2);
+    ScanNode* a = out ? Child(out->root.get(), L"a") : nullptr;
+    CHECK(a && !IsBuilding(*a) && a->size == 12000 && a->files == 2 && a->dirs == 1);
+    CHECK(out && out->root->size == 12300 && out->root->files == 3 && out->root->dirs == 3);
+    CHECK(out && out->expected == 0 && out->allocated >= 12300);  // a folder scan has no known total
+    CHECK(AllocatedSizeOf(FILE_ATTRIBUTE_COMPRESSED, 5000, 4096, L"X:\\no\\such\\", L"f", false) == 8192);  // estimate: no file is opened
+    {  // a disk whose folder listings are slow is noticed and read with one thread, and the totals stay exact
+        std::wstring slow = base + L"\\slowdisk";
+        for (int d = 0; d < 230; ++d) {
+            std::wstring dir = slow + L"\\d" + std::to_wstring(d);
+            MkDirs(dir);
+            MkFile(dir + L"\\f.bin", 10);
+        }
+        DirectoryScanner dsSlow;
+        std::unique_ptr<ScanResult> slowRes;
+        ScanCallbacks cbSlow;
+        cbSlow.onFinished = [&](std::unique_ptr<ScanResult> r) { slowRes = std::move(r); };
+        ScanOptions so{4};
+        so.testListDelayUs = 12000;  // every folder "takes" at least 12 ms
+        dsSlow.Scan({slow}, so, cbSlow, {});
+        CHECK(slowRes && slowRes->slowDisk && slowRes->root->files == 230 && slowRes->root->size == 2300);
+    }
+    {  // many folders, two roots, few threads: must always finish with exact totals (guards the per-root queues / wake-ups)
+        std::wstring r1 = base + L"\\stress1", r2 = base + L"\\stress2";
+        for (int d = 0; d < 40; ++d)
+            for (const std::wstring& r : {r1, r2}) {
+                std::wstring dir = r + L"\\d" + std::to_wstring(d) + L"\\sub";
+                MkDirs(dir);
+                MkFile(dir + L"\\a.bin", 100);
+                MkFile(r + L"\\d" + std::to_wstring(d) + L"\\b.bin", 50);
+            }
+        bool allOk = true;
+        for (int round = 0; round < 8; ++round) {
+            auto res = RunScan({r1, r2}, {}, 4);
+            allOk = allOk && res && res->root->files == 160 && res->root->size == 12000 && !res->canceled;  // 2 roots x 40 x (100 + 50)
+        }
+        CHECK(allOk);
+    }
+}
+
+
+static void TestSelectionKeep() {
+    SECTION("Selection survives a refresh (SelKeep)");
+    ScanNode root;
+    root.name = L"C:\\";
+    root.type = NodeType::Directory;
+    root.scanRoot = true;
+    root.dir = std::make_unique<DirData>();
+    root.dir->children.reserve(8);
+    ScanNode* a = AddNode(&root, L"a.txt", NodeType::File, 1);
+    ScanNode* b = AddNode(&root, L"b.txt", NodeType::File, 2);
+    ScanNode* c = AddNode(&root, L"c.txt", NodeType::File, 3);
+
+    // user ticked b and c; an auto-update drops the nodes (Remember), then a Reload arrives while rows/ticks are already empty
+    std::vector<ScanNode*> rows{a, b, c};
+    std::unordered_set<const ScanNode*> ticked{b, c};
+    SelKeep keep;
+    keep.Remember(rows, ticked, nullptr, true);          // DropReferences
+    rows.clear();
+    ticked.clear();
+    keep.Remember(rows, ticked, nullptr, true);          // Reload right behind it: must NOT wipe the memory
+    CHECK(keep.Pending());
+    std::vector<ScanNode*> newRows{c, b, a};             // rebuilt (and sorted differently)
+    keep.Restore(newRows, ticked, nullptr);
+    CHECK(ticked.size() == 2 && ticked.count(b) && ticked.count(c) && !ticked.count(a));
+    CHECK(!keep.Pending());
+
+    // "Select all" stays "all" when the rows are only refreshed
+    std::unordered_set<const ScanNode*> all{a, b, c};
+    SelKeep k2;
+    k2.Remember(newRows, all, nullptr, true);
+    std::unordered_set<const ScanNode*> after;
+    k2.Restore(newRows, after, nullptr);
+    CHECK(after.size() == 3);
+
+    // ...but not when the user changed the filter (allowAll = false): only rows that were ticked and are still there
+    SelKeep k3;
+    k3.Remember(newRows, all, nullptr, false);
+    std::vector<ScanNode*> filtered{a};
+    std::unordered_set<const ScanNode*> after3;
+    k3.Restore(filtered, after3, nullptr);
+    CHECK(after3.size() == 1 && after3.count(a));
+}
+
 static void TestSearch() {
     SECTION("Search index");
     ScanNode root;
@@ -488,6 +622,14 @@ static void TestSearch() {
     CHECK(run(s) == 1);
     s.text = L"(";
     CHECK(!ix.Run(s).error.empty() && run(s) == 0);
+    for (const wchar_t* bad : {L"(a+)+$", L"(.*x)*", L"((a|b)+c)+", L"(\\w+\\s?)*"}) {  // a repeat inside a repeat: refused, never run
+        s.text = bad;
+        CHECK(!ix.Run(s).error.empty());
+    }
+    for (const wchar_t* good : {L"^re.*pdf$", L"(jpg|png)$", L"(\\d{4}-\\d{2})+", L"(ab){2,3}c", L"\\(a+\\)", L"[(+*]x"}) {  // ordinary patterns still work
+        s.text = good;
+        CHECK(ix.Run(s).error.empty());
+    }
     s = {};
     s.hideDir = [](const ScanNode& n) { return n.name == L"Games"; };
     s.kind = SearchKind::FilesOnly;
@@ -1120,6 +1262,8 @@ int main() {
     TestTreeEdits(base);
     TestAppData();
     TestSearch();
+    TestSelectionKeep();
+    TestLiveScan(base);
     TestUiHelpers();
     TestTempIgnore(base);
     TestStatsAndHistory(base);

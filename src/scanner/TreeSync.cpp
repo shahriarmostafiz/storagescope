@@ -146,6 +146,7 @@ std::vector<std::wstring> ValidateDirs(const std::vector<DirCheck>& checks, unsi
         std::vector<std::jthread> pool;
         for (unsigned w = 0; w < workers; ++w)
             pool.emplace_back([&, w] {
+                SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);  // low CPU and disk priority: this is housekeeping, never worth slowing the user down
                 for (size_t i = w; i < checks.size(); i += workers) {
                     if ((i & 1023) == w && st.stop_requested()) return;
                     WIN32_FILE_ATTRIBUTE_DATA fa;

@@ -24,7 +24,7 @@ class DriveManager {
 public:
     static std::vector<DriveInfo> Enumerate();  // all mounted drive letters
     static MediaKind DetectMedia(wchar_t letter);
-    // Worker count: SSD 4-8, HDD 2, unknown 4. Mixed roots => most conservative.
+    // Worker count: SSD 4-8, unknown 2, HDD 1. Mixed roots => most conservative.
     static unsigned AutoWorkers(const std::vector<std::wstring>& roots);
 };
 

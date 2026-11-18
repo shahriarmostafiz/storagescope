@@ -55,7 +55,10 @@ public:
     Settings& settings() { return settings_; }
     const PathProtectionService& protection() const { return prot_; }
     ScanResult* scan() const { return scan_.get(); }
-    bool busy() const { return scanning_ || deleting_ || loading_; }
+    uint64_t treeRev() const { return treeRev_; }
+    // What the Storage Analyzer and Treemap show: the tree that is being scanned right now (browsable while it fills), else the finished scan.
+    ScanResult* viewScan() const { return liveOn_ ? live_ : scan_.get(); }
+    bool busy() const { return scanning_ || deleting_ || loading_ || saving_; }
     // Header of the remembered scan, while the full tree is still loading (the Dashboard shows its stats meanwhile).
     const SnapshotSummary* SavedSummary() const { return saved_.get(); }
     void ClearSavedScan();                    // deletes lastscan.bin
@@ -134,6 +137,13 @@ private:
     void HideIgnoredInTree();                 // detach folders of the ignore list from the loaded tree
 
     HWND hwnd_ = nullptr, nav_ = nullptr, status_ = nullptr, stats_ = nullptr, prog_ = nullptr, stop_ = nullptr, details_ = nullptr;
+    ScanResult* live_ = nullptr;     // the running scan's tree (owned by the scan thread, then by pending_); UI thread only
+    bool liveOn_ = false;
+    ScanResult* liveNew_ = nullptr;  // hand-over slot (guarded by shared_)
+    ULONGLONG lastLiveTick_ = 0;
+    uint64_t etaLastMs_ = 0, etaLastAlloc_ = 0;  // scan speed samples for the time-left estimate
+    double etaRate_ = 0;                         // smoothed bytes of disk space found per second
+    void OnScanLive();
     bool showDetails_ = false;  // "More info" while scanning: show the folder being scanned
     UINT dpi_ = 96;
     HFONT font_ = nullptr, bold_ = nullptr, title_ = nullptr;
@@ -179,11 +189,17 @@ private:
     uint64_t gen_ = 0, syncGen_ = 0;                       // bumped whenever scan_ is replaced: late results are dropped
     int syncHold_ = 0;                                     // >0 while a dialog holds node pointers (no tree edits then)
     bool treeDirty_ = false, cleared_ = false, rememberOn_ = true;
+    uint64_t treeRev_ = 0;  // +1 every time the tree is changed (scan, delete, auto-update, ignore list)
     uint64_t dataFt_ = 0, updateFt_ = 0;                   // when the data was scanned / last confirmed current (FILETIME)
     ChangeWatcher watcher_;
 
     // Declared last: destroyed (stopped + joined) first.
     std::jthread scanThread_;
+    std::jthread saveThread_;  // writes the saved scan after a full scan, so the scan itself is reported as done right away
+    std::atomic<bool> saving_{false};
+    bool saveOk_ = false;
+    void StartSave();
+    void OnSaveDone();
     std::jthread delThread_;
     std::jthread loadThread_;
     std::jthread valThread_;

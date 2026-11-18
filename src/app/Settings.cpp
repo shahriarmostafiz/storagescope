@@ -154,6 +154,7 @@ void Settings::Load() {
     u("workers", workers, 0, 16);
     u("oldAge", oldAge, 0, 4);
     u("oldSize", oldSize, 0, 3);
+    u("scanRatio", scanRatio, 300, 1100);
     u("searchFlags", searchFlags, 0, 15);
     u("searchWhere", searchWhere, 0, 1);
     u("searchKind", searchKind, 0, 2);
@@ -205,9 +206,9 @@ void Settings::Save() const {
     char extra[800];
     sprintf_s(extra,
               "  \"keepHistory\": %s,\n  \"rememberScan\": %s,\n  \"autoUpdate\": %s,\n  \"firstRunDone\": %s,\n  \"lastFullScanDay\": %u,\n"
-              "  \"oldAge\": %u,\n  \"oldSize\": %u,\n  \"searchFlags\": %u,\n  \"searchWhere\": %u,\n  \"searchKind\": %u,\n  \"searchType\": %u,\n  \"searchDate\": %u,\n  \"window\":\"%d,%d,%d,%d,%d,%d\",\n",
+              "  \"oldAge\": %u,\n  \"oldSize\": %u,\n  \"scanRatio\": %u,\n  \"searchFlags\": %u,\n  \"searchWhere\": %u,\n  \"searchKind\": %u,\n  \"searchType\": %u,\n  \"searchDate\": %u,\n  \"window\":\"%d,%d,%d,%d,%d,%d\",\n",
               keepHistory ? "true" : "false", rememberScan ? "true" : "false", autoUpdate ? "true" : "false", firstRunDone ? "true" : "false",
-              lastFullScanDay, oldAge, oldSize, searchFlags, searchWhere, searchKind, searchType, searchDate, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
+              lastFullScanDay, oldAge, oldSize, scanRatio, searchFlags, searchWhere, searchKind, searchType, searchDate, winX, winY, winW, winH, maximized ? 1 : 0, lastPage);
     std::string j = std::string(buf) + extra + "  \"searchInclude\": \"" + Esc(searchInclude) + "\",\n  \"searchExclude\": \"" + Esc(searchExclude) +
                     "\",\n  \"searchScope\": \"" + Esc(Join(searchScope)) + "\",\n  \"searchSkip\": \"" + Esc(Join(searchSkip)) +
                     "\",\n  \"ignored\": \"" + esc + "\"\n}\n";

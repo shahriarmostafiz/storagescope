@@ -35,7 +35,7 @@ bool IsAppDataRoot(const ScanNode* n) {
 
 void FindAppDataRoots(const ScanNode* n, std::vector<const ScanNode*>& out) {
     if (!n || !n->dir) return;
-    for (const auto& c : n->dir->children) {
+    for (const auto& c : KidsOf(*n)) {
         if (c.removed) continue;
         if (IsAppDataRoot(&c)) out.push_back(&c);
         else if (c.type == NodeType::Directory && (n->type == NodeType::Virtual || path::EqualsNoCase(c.name, L"Users") || path::EqualsNoCase(n->name, L"Users")))
@@ -65,6 +65,14 @@ std::wstring BuildPath(const ScanNode* n) {
     }
     return out;
 }
+
+const std::vector<ScanNode>& KidsOf(const ScanNode& n) {
+    static const std::vector<ScanNode> none;
+    if (!n.dir || n.dir->building.load(std::memory_order_acquire)) return none;
+    return n.dir->children;
+}
+
+bool IsBuilding(const ScanNode& n) { return n.dir && n.dir->building.load(std::memory_order_acquire); }
 
 std::wstring DisplayName(const ScanNode* n) {
     if (n->type == NodeType::Virtual) return L"This PC";
@@ -182,9 +190,9 @@ ScanNode* FindNodeByPath(ScanNode* root, const std::wstring& path) {
         if (comp.empty()) continue;
         ScanNode* next = nullptr;
         if (cur->dir)
-            for (auto& k : cur->dir->children)
+            for (const auto& k : KidsOf(*cur))  // safe while a scan is still filling the tree
                 if (!k.removed && path::EqualsNoCase(k.name, comp)) {
-                    next = &k;
+                    next = const_cast<ScanNode*>(&k);
                     break;
                 }
         if (!next) return nullptr;

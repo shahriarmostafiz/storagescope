@@ -88,10 +88,7 @@ bool SearchView::Checked(HWND h) const { return SendMessageW(h, BM_GETCHECK, 0, 
 void SearchView::OnCreate() {
     lblWhere_ = Make(L"STATIC", L"Search in:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbWhere_ = Make(L"SSCombo", L"Search in", WS_TABSTOP, ID_WHERE);
-    for (const wchar_t* s : {L"Whole system", L"Selected folders"}) SendMessageW(cbWhere_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
-    cbDrive_ = Make(L"SSCombo", L"Drive", WS_TABSTOP, ID_DRIVE);
-    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
-    SendMessageW(cbDrive_, CB_SETCURSEL, 0, 0);
+    FillDrives();  // "All drives", one entry per scanned drive, "Selected folders..."
     lblKind_ = Make(L"STATIC", L"Show:", SS_LEFT | SS_CENTERIMAGE, 0);
     cbKind_ = Make(L"SSCombo", L"Show", WS_TABSTOP, ID_KIND);
     for (const wchar_t* s : {L"Files and folders", L"Files only", L"Folders only"}) SendMessageW(cbKind_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
@@ -164,7 +161,8 @@ void SearchView::OnCreate() {
 
     // restore the remembered choices
     const Settings& s = mw_->settings();
-    SendMessageW(cbWhere_, CB_SETCURSEL, std::min<uint32_t>(s.searchWhere, 1), 0);
+    foldersMode_ = s.searchWhere == 1;
+    FillDrives();
     SendMessageW(cbKind_, CB_SETCURSEL, std::min<uint32_t>(s.searchKind, 2), 0);
     SendMessageW(cbType_, CB_SETCURSEL, std::min<uint32_t>(s.searchType, kCategoryCount), 0);
     SendMessageW(cbDate_, CB_SETCURSEL, std::min<uint32_t>(s.searchDate, 7), 0);
@@ -185,7 +183,7 @@ void SearchView::OnCreate() {
 void SearchView::SaveChoices() {
     if (loading_) return;
     Settings& s = mw_->settings();
-    s.searchWhere = static_cast<uint32_t>(std::max<LRESULT>(0, SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0)));
+    s.searchWhere = foldersMode_ ? 1 : 0;
     s.searchKind = static_cast<uint32_t>(std::max<LRESULT>(0, SendMessageW(cbKind_, CB_GETCURSEL, 0, 0)));
     s.searchType = static_cast<uint32_t>(std::max<LRESULT>(0, SendMessageW(cbType_, CB_GETCURSEL, 0, 0)));
     s.searchDate = static_cast<uint32_t>(std::max<LRESULT>(0, SendMessageW(cbDate_, CB_GETCURSEL, 0, 0)));
@@ -199,29 +197,35 @@ void SearchView::SaveChoices() {
 std::vector<ScanNode*> SearchView::Roots() const {
     std::vector<ScanNode*> out;
     ScanResult* sc = mw_->scan();
-    if (sc && sc->root && sc->root->type == NodeType::Virtual && sc->root->dir)
+    if (!sc || !sc->root) return out;
+    if (sc->root->type == NodeType::Virtual && sc->root->dir) {
         for (auto& c : sc->root->dir->children)
             if (!c.removed && c.scanRoot) out.push_back(&c);
+    } else if (sc->root->scanRoot) {
+        out.push_back(sc->root.get());  // a single drive or folder was scanned
+    }
     return out;
 }
 
 void SearchView::FillDrives() {
-    SendMessageW(cbDrive_, CB_RESETCONTENT, 0, 0);
-    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
+    // One list answers "where": everything, one drive, or folders I pick.
+    SendMessageW(cbWhere_, CB_RESETCONTENT, 0, 0);
+    SendMessageW(cbWhere_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
     int pick = 0;
     for (ScanNode* r : Roots()) {
-        int i = static_cast<int>(SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(DisplayName(r).c_str())));
+        int i = static_cast<int>(SendMessageW(cbWhere_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>((L"Drive " + DisplayName(r)).c_str())));
         if (!drive_.empty() && path::EqualsNoCase(r->name, drive_)) pick = i;
     }
-    SendMessageW(cbDrive_, CB_SETCURSEL, pick, 0);
-    if (!pick) drive_.clear();
+    int last = static_cast<int>(SendMessageW(cbWhere_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Selected folders...")));
+    if (foldersMode_) pick = last;
+    else if (!pick) drive_.clear();
+    SendMessageW(cbWhere_, CB_SETCURSEL, pick, 0);
 }
 
 void SearchView::ShowPanels() {
-    bool folders = SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0) == 1;
-    ShowWindow(cbDrive_, folders ? SW_HIDE : SW_SHOW);
+    bool folders = foldersMode_;
     for (HWND h : {lblScope_, lbScope_, bAddScope_, bRemScope_}) ShowWindow(h, folders ? SW_SHOW : SW_HIDE);
-    for (HWND h : {lblType_, cbType_, edInclude_, edExclude_, edMin_, edMax_, lblDate_, cbDate_, chkCase_, chkWord_, chkRegex_, lblSkip_, lbSkip_, bAddSkip_, bRemSkip_})
+    for (HWND h : {edInclude_, edExclude_, edMin_, edMax_, lblDate_, cbDate_, chkCase_, chkWord_, chkRegex_, lblSkip_, lbSkip_, bAddSkip_, bRemSkip_})
         ShowWindow(h, advanced_ ? SW_SHOW : SW_HIDE);
     SetWindowTextW(bFilters_, advanced_ ? L"Hide filters" : L"Filters");
     InvalidateRect(bFilters_, nullptr, TRUE);
@@ -231,7 +235,7 @@ void SearchView::Layout(int w, int h) {
     lastW_ = w;
     lastH_ = h;
     int m = mw_->S(12), gap = mw_->S(8), ch = mw_->S(34), bh = mw_->S(32);
-    bool folders = SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0) == 1;
+    bool folders = foldersMode_;
     int x = m, y = mw_->S(8);
     struct It {
         HWND h;
@@ -260,9 +264,9 @@ void SearchView::Layout(int w, int h) {
         y += lh + gap;
     };
 
-    if (folders) group({{lblWhere_, 80}, {cbWhere_, 190}});
-    else group({{lblWhere_, 80}, {cbWhere_, 190}, {cbDrive_, 140}});
+    group({{lblWhere_, 80}, {cbWhere_, 230}});
     group({{lblKind_, 50}, {cbKind_, 170}});
+    group({{lblType_, 48}, {cbType_, 170}});  // the file type is one of the first things people search by: always visible
     y += ch + gap;
     x = m;
     int fw = mw_->S(120);
@@ -272,7 +276,6 @@ void SearchView::Layout(int w, int h) {
     if (folders) folderRow(lblScope_, lbScope_, bAddScope_, bRemScope_);
     if (advanced_) {
         x = m;
-        group({{lblType_, 48}, {cbType_, 150}});
         group({{edInclude_, 230}});
         group({{edExclude_, 200}});
         y += ch + gap;
@@ -345,21 +348,22 @@ void SearchView::SetQuery(const std::wstring& q) {
 }
 
 void SearchView::OnShow() {
-    if (dirty_ || rows_.empty()) Run();
+    if (dirty_ || stale_ || rows_.empty()) Run();
 }
 
+// The tree changed a little (sizes, deletes, auto-update). The name index stays valid: it is only dropped, and rebuilt, when nodes were
+// added or the tree was replaced (DropReferences). Rebuilding it on every update froze this page for about a second each time.
 void SearchView::Reload() {
-    dirty_ = true;
-    if (!IsWindowVisible(hwnd_)) return;
-    auto keep = std::move(checked_);  // ticks survive a refresh; they are only compared by address, never used
+    if (!IsWindowVisible(hwnd_)) {
+        stale_ = true;  // search again when the page is shown
+        return;
+    }
+    keep_.Remember(rows_, checked_, list_, true);  // ticks and highlighted rows survive an auto-update
     Run();
-    for (ScanNode* n : rows_)
-        if (keep.count(n)) checked_.insert(n);
-    InvalidateRect(list_, nullptr, FALSE);
-    UpdateButtons();
 }
 
 void SearchView::DropReferences() {
+    keep_.Remember(rows_, checked_, list_, true);  // by path: the nodes are about to be rebuilt
     index_.Clear();
     rows_.clear();
     checked_.clear();
@@ -369,6 +373,8 @@ void SearchView::DropReferences() {
 
 void SearchView::Run() {
     KillTimer(hwnd_, kTimer);
+    stale_ = false;
+    if (!keep_.Pending()) keep_.Remember(rows_, checked_, list_, false);
     rows_.clear();
     checked_.clear();
     ScanResult* sc = mw_->scan();
@@ -410,7 +416,7 @@ void SearchView::Run() {
             if (!showApp && IsAppDataRoot(&c)) return true;
             if (c.scanRoot || (c.parent && c.parent->scanRoot)) {  // Windows / Program Files: only the top level needs asking
                 std::wstring p = BuildPath(&c);
-                return !path::IsDriveRoot(p) && mw_->protection().Classify(p).level >= ProtectionLevel::NoDelete;
+                return !path::IsDriveRoot(p) && mw_->protection().IsSystemLocation(p);
             }
             return false;
         };
@@ -418,7 +424,7 @@ void SearchView::Run() {
         sp.cancel = [t0] { return GetTickCount64() - t0 > kBudgetMs; };
 
         int missing = 0;
-        bool folders = SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0) == 1;
+        bool folders = foldersMode_;
         if (folders)
             for (const auto& p : scope_) {
                 if (const ScanNode* n = FindNodeByPath(sc->root.get(), p)) sp.scopes.push_back(n);
@@ -449,12 +455,13 @@ void SearchView::Run() {
                 if (r.truncated) info += L"   -   showing the first 50,000, refine the search to narrow it";
                 if (r.canceled) info += L"   -   stopped after 3 seconds, refine the search";
                 if (missing) info += L"   -   " + Plural(static_cast<size_t>(missing), L"chosen folder is", L"chosen folders are") + L" not in the scan";
-                if (rows_.empty()) emptyMsg = L"Nothing matched. Check the filters, or try fewer words.";
+                if (rows_.empty()) emptyMsg = L"Nothing matched. Check the filters, or try fewer words. Windows, Program Files and app data are not searched (Settings > Show app data).";
             }
         }
     }
     Sort();
     ListView_SetItemCountEx(list_, static_cast<int>(rows_.size()), 0);
+    keep_.Restore(rows_, checked_, list_);
     InvalidateRect(list_, nullptr, FALSE);
     bool none = rows_.empty();
     ShowWindow(list_, none ? SW_HIDE : SW_SHOW);
@@ -464,7 +471,76 @@ void SearchView::Run() {
     UpdateButtons();
 }
 
+// Best match first: a file named exactly like the query, then names that start with it, then whole-word hits, then names that merely
+// contain it, then everything else the filters let through (several words, wildcards, path words). Ties: shorter name, then A-Z.
+void SearchView::SortByRelevance(const std::wstring& query) {
+    auto lower = [](std::wstring s) {
+        for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
+        return s;
+    };
+    std::wstring q;
+    for (wchar_t c : query)
+        if (c != L'"') q += c;
+    q = lower(q);
+    while (!q.empty() && q.back() == L' ') q.pop_back();
+    while (!q.empty() && q.front() == L' ') q.erase(q.begin());
+    auto isWord = [](wchar_t c) { return iswalnum(c) || c == L'_'; };
+    struct Key {
+        int tier;
+        size_t len;
+        ScanNode* n;
+    };
+    std::vector<Key> keys;
+    keys.reserve(rows_.size());
+    for (ScanNode* n : rows_) {
+        std::wstring name = lower(n->name);
+        std::wstring stem = name;
+        if (n->type == NodeType::File)
+            if (size_t dot = name.rfind(L'.'); dot != std::wstring::npos && dot > 0) stem = name.substr(0, dot);
+        int tier = 4;
+        if (!q.empty()) {
+            if (name == q || stem == q) tier = 0;
+            else if (name.rfind(q, 0) == 0) tier = 1;
+            else {
+                size_t at = name.find(q);
+                if (at != std::wstring::npos) {
+                    tier = 3;
+                    for (; at != std::wstring::npos; at = name.find(q, at + 1)) {
+                        bool left = at == 0 || !isWord(name[at - 1]);
+                        bool right = at + q.size() >= name.size() || !isWord(name[at + q.size()]);
+                        if (left && right) {
+                            tier = 2;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        keys.push_back({tier, name.size(), n});
+    }
+    std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
+        if (a.tier != b.tier) return a.tier < b.tier;
+        if (a.len != b.len) return a.len < b.len;
+        return CompareStringOrdinal(a.n->name.c_str(), -1, b.n->name.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+    });
+    for (size_t i = 0; i < keys.size(); ++i) rows_[i] = keys[i].n;
+    HWND hdr = ListView_GetHeader(list_);  // no column is the order now: no arrow
+    for (int i = 0; i < C_COUNT; ++i) {
+        HDITEMW it{HDI_FORMAT};
+        if (!Header_GetItem(hdr, i, &it)) continue;
+        it.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        Header_SetItem(hdr, i, &it);
+    }
+}
+
 void SearchView::Sort() {
+    if (byRelevance_ && !Checked(chkRegex_)) {
+        std::wstring q = Text(edQuery_);
+        if (!q.empty()) {
+            SortByRelevance(q);
+            return;
+        }
+    }
     if (sortCol_ == C_LOC || sortCol_ == C_TYPE) {  // build each key once; building it per comparison froze the UI on big lists
         std::vector<std::pair<std::wstring, ScanNode*>> keyed;
         keyed.reserve(rows_.size());
@@ -583,6 +659,7 @@ LRESULT SearchView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                 case LVN_ODFINDITEMW: return -1;
                 case LVN_COLUMNCLICK: {
                     int c = reinterpret_cast<NMLISTVIEW*>(l)->iSubItem;
+                    byRelevance_ = false;  // the user chose an order
                     if (c == sortCol_) sortAsc_ = !sortAsc_;
                     else {
                         sortCol_ = c;
@@ -649,12 +726,13 @@ LRESULT SearchView::OnMessage(UINT m, WPARAM w, LPARAM l) {
             } else if (code == EN_CHANGE && (id == ID_QUERY || id == ID_INCLUDE || id == ID_EXCLUDE || id == ID_MIN || id == ID_MAX)) {
                 if (!loading_) rerun();
             } else if (code == CBN_SELCHANGE) {
-                if (id == ID_DRIVE) {
-                    int i = static_cast<int>(SendMessageW(cbDrive_, CB_GETCURSEL, 0, 0));
-                    auto roots = Roots();
-                    drive_ = i > 0 && i <= static_cast<int>(roots.size()) ? roots[static_cast<size_t>(i - 1)]->name : L"";
-                }
                 if (id == ID_WHERE) {
+                    int i = static_cast<int>(SendMessageW(cbWhere_, CB_GETCURSEL, 0, 0));
+                    int n = static_cast<int>(SendMessageW(cbWhere_, CB_GETCOUNT, 0, 0));
+                    auto roots = Roots();
+                    foldersMode_ = i == n - 1;
+                    drive_ = !foldersMode_ && i > 0 && i <= static_cast<int>(roots.size()) ? roots[static_cast<size_t>(i - 1)]->name : L"";
+                    SaveChoices();
                     ShowPanels();
                     Layout(lastW_, lastH_);
                 }

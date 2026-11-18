@@ -20,6 +20,45 @@ std::wstring LowerStr(std::wstring s) {
     return s;
 }
 
+// A group that repeats and itself contains a repeat, like (a+)+ or (.*x)*, makes std::regex take exponential time on some names, and a
+// single match cannot be interrupted. Such patterns are refused up front.
+// Is the quantifier at p[i] unbounded? (* + and {n,}; a fixed {n} or {n,m} is not)
+bool Unbounded(const std::wstring& p, size_t i) {
+    if (p[i] == L'*' || p[i] == L'+') return true;
+    if (p[i] != L'{') return false;
+    size_t close = p.find(L'}', i);
+    return close != std::wstring::npos && close > i + 1 && p[close - 1] == L',';
+}
+
+bool RepeatsARepeat(const std::wstring& p) {
+    std::vector<bool> hasRepeat;  // one entry per open group: does it contain a repeat?
+    bool inClass = false;
+    for (size_t i = 0; i < p.size(); ++i) {
+        wchar_t c = p[i];
+        if (c == L'\\') {
+            ++i;
+            continue;
+        }
+        if (inClass) {
+            if (c == L']') inClass = false;
+            continue;
+        }
+        if (c == L'[') {
+            inClass = true;
+        } else if (c == L'(') {
+            hasRepeat.push_back(false);
+        } else if (c == L')') {
+            bool inner = !hasRepeat.empty() && hasRepeat.back();
+            if (!hasRepeat.empty()) hasRepeat.pop_back();
+            if (inner && i + 1 < p.size() && Unbounded(p, i + 1)) return true;
+            if (inner && !hasRepeat.empty()) hasRepeat.back() = true;
+        } else if (Unbounded(p, i) && !hasRepeat.empty()) {
+            hasRepeat.back() = true;
+        }
+    }
+    return false;
+}
+
 bool IsGlob(const std::wstring& s) { return s.find_first_of(L"*?") != std::wstring::npos; }
 
 // Whole-string wildcard match: * = any run, ? = any one character.
@@ -187,6 +226,10 @@ SearchResult SearchIndex::Run(const SearchSpec& sp) const {
     std::vector<Term> terms;
     std::wregex re;
     bool useRe = sp.regex && !sp.text.empty();
+    if (useRe && (sp.text.size() > 300 || RepeatsARepeat(sp.text))) {
+        res.error = L"This pattern repeats a repeat, like (a+)+, which can take far too long. Simplify it.";
+        return res;
+    }
     if (useRe) {
         try {
             auto flags = std::regex_constants::ECMAScript | std::regex_constants::optimize;

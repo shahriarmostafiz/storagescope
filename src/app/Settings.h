@@ -18,6 +18,7 @@ struct Settings {
     uint32_t accent = 0;         // accent colour preset (index into the table in View.cpp; 0 = Emerald)
     uint32_t oldAge = 1;                // Old Files page: index into its age list (1 = 3 months)
     uint32_t oldSize = 1;               // Old Files page: index into its size list (1 = 10 MB)
+    uint32_t scanRatio = 920;           // per mille of a drive's used space that past scans found as files (system areas are not): scales the scan percentage
     // Search page (remembered between sessions; the query text itself is not)
     uint32_t searchFlags = 0;  // bit0 filters panel open, bit1 match case, bit2 whole word, bit3 regex
     uint32_t searchWhere = 0;  // 0 = whole system, 1 = selected folders

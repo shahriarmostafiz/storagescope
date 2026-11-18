@@ -119,7 +119,7 @@ void TreemapView::Rebuild() {
     dirty_ = false;
     tiles_.clear();
     hover_ = sel_ = -1;
-    ScanResult* sc = mw_->scan();
+    ScanResult* sc = mw_->viewScan();
     if (!sc) cur_ = nullptr;
     else if (!cur_ || cur_->removed) {
         cur_ = keepPath_.empty() ? nullptr : FindNodeByPath(sc->root.get(), keepPath_);
@@ -130,19 +130,21 @@ void TreemapView::Rebuild() {
     hiddenApp_ = 0;
     uint64_t shownApp = 0;  // app data that has its own view-only card here (the rest is only mentioned in the hint)
     bool any = false;
-    if (cur_ && cur_->dir && area_.right > area_.left && area_.bottom > area_.top) {
+    if (cur_ && cur_->dir && !IsBuilding(*cur_) && area_.right > area_.left && area_.bottom > area_.top) {
         const Settings& s = mw_->settings();
         std::vector<Tile> all;
-        for (auto& c : cur_->dir->children) {
-            if (c.removed || c.size == 0 || (c.type != NodeType::File && c.type != NodeType::Directory)) continue;
+        for (const auto& cc : KidsOf(*cur_)) {
+            ScanNode& c = const_cast<ScanNode&>(cc);
+            const uint64_t csize = LiveSize(c);
+            if (c.removed || csize == 0 || (c.type != NodeType::File && c.type != NodeType::Directory)) continue;
             if (!s.showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
             if (c.attrs & FILE_ATTRIBUTE_SYSTEM) continue;  // system files are never shown
             if (!s.showAppData && IsAppDataRoot(&c)) {  // AppData / ProgramData: a locked, view-only card (Settings > Scan unlocks it)
-                all.push_back({{}, &c, c.size, 0, true});
-                shownApp += c.size;
+                all.push_back({{}, &c, csize, 0, true});
+                shownApp += csize;
                 continue;
             }
-            all.push_back({{}, &c, c.size, 0});
+            all.push_back({{}, &c, csize, 0});
         }
         if (!s.showAppData) {
             uint64_t total = AppDataBytes(cur_);

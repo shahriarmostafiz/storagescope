@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "scanner/ScanNode.h"
+#include "ui/SelKeep.h"
 #include "ui/View.h"
 
 namespace ss {
@@ -20,7 +21,10 @@ public:
     void Layout(int w, int h) override;
     LRESULT OnMessage(UINT m, WPARAM w, LPARAM l) override;
     void OnShow() override { Rebuild(); }
-    void Reload() override { Rebuild(); }
+    void Reload() override {
+        keep_.Remember(rows_, checked_, list_, true);  // an auto-update must not drop the user's selection
+        Rebuild();
+    }
     void OnBusyChanged() override { UpdateSelectionUi(); }
     void DropReferences() override;
 
@@ -52,6 +56,7 @@ private:
     bool barShown_ = false, canDelete_ = false;  // action buttons are shown only while something is selected
     ScanNode* cur_ = nullptr;
     std::wstring keepPath_;
+    SelKeep keep_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column (together with highlighted rows when none is ticked)
     bool searchMode_ = false, suppressSearch_ = false, truncated_ = false;
     std::vector<ScanNode*> rows_, searchRows_;

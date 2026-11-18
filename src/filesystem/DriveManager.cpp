@@ -73,12 +73,12 @@ unsigned DriveManager::AutoWorkers(const std::vector<std::wstring>& roots) {
     unsigned result = ssd;
     for (const auto& r : roots) {
         if (r.size() < 2 || r[1] != L':') {
-            result = std::min(result, 4u);
+            result = std::min(result, 2u);
             continue;
         }
         MediaKind k = DetectMedia(static_cast<wchar_t>(towupper(r[0])));
-        if (k == MediaKind::Hdd) result = std::min(result, 2u);
-        else if (k == MediaKind::Unknown) result = std::min(result, 4u);
+        if (k == MediaKind::Hdd) result = 1;  // parallel readers make a spinning disk's head jump around: one is faster than two
+        else if (k == MediaKind::Unknown) result = std::min(result, 2u);
     }
     return result;
 }

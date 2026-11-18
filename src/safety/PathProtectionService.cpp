@@ -114,6 +114,20 @@ ProtectionInfo PathProtectionService::Classify(const std::wstring& p) const {
     return r;
 }
 
+bool PathProtectionService::IsSystemLocation(const std::wstring& p) const {
+    std::wstring c = path::Canonicalize(p);
+    if (c.empty() || c[0] == L'\\' || path::IsDriveRoot(c)) return false;
+    if (!cfg_.systemRoot.empty() && path::IsSameOrUnder(c, cfg_.systemRoot)) return true;
+    for (const auto& pd : cfg_.programDirs)
+        if (!pd.empty() && path::IsSameOrUnder(c, pd)) return true;
+    size_t e = c.find(L'\\', 3);
+    std::wstring first = c.substr(3, e == std::wstring::npos ? std::wstring::npos : e - 3);
+    if (!first.empty() && first[0] == L'$') return true;
+    for (const wchar_t* n : kRootNames)
+        if (path::EqualsNoCase(first, n)) return true;
+    return false;
+}
+
 bool PathProtectionService::IsProtectedPath(const std::wstring& p) const {
     return Classify(p).level == ProtectionLevel::Critical;
 }

@@ -99,7 +99,8 @@ defaults you can turn off under Settings > Scan memory and updates.
   lists. After you delete something the parent folders are re-listed too. If the watcher loses events (buffer overflow)
   the app re-checks everything instead of guessing. A saved scan whose last full scan is over 7 days old is rescanned
   automatically. Turning automatic updates off disables the watcher, the launch check, the first-launch scan and the old-scan rescan; scanning stays manual.
-* **First launch** with no saved scan scans all local drives once in the background (Stop Scan works).
+* **First launch** with no saved scan scans all local drives once in the background (Stop Scan works). Hard drives are left out:
+  start those from the Dashboard. On a hard drive the saved scan is also not re-checked at launch and never rescanned automatically.
 * Manual scans (Scan Drive/Folder/All, Refresh) always work and replace the saved scan.
 
 ## Architecture
@@ -129,7 +130,9 @@ the test executable.
 
 * `FindFirstFileExW(FindExInfoBasic, FIND_FIRST_EX_LARGE_FETCH)` on `\\?\` paths (long paths work).
 * A fixed pool of worker threads takes directories from a LIFO queue. Never one thread per directory.
-  Auto worker count: SSD 4-8, HDD 2, unknown 4; overridable in Settings.
+  Auto worker count per disk: SSD 4-8, HDD 1, unknown 2 (raised to the SSD count when its folders list fast; an unknown disk whose
+  folders list slowly drops to 1). Overridable in Settings. After 3 s of opening compressed/sparse files for their exact size
+  (one disk seek each) the rest is estimated from the logical size.
 * Each worker enumerates one directory into a contiguous `std::vector<ScanNode>`, adds its own files to
   the directory's totals and queues sub-directories. A per-directory pending counter finalises a folder
   when its whole subtree is done and adds its totals to the parent. **Parents are never re-scanned.**
@@ -204,7 +207,7 @@ persisted in `lastscan.bin` (file and folder names; see "Remembered scan and aut
 
 ## Verification (Windows 11 x64, MSVC 14.29, Release, this machine)
 
-Automated (`StorageScopeTests.exe`, 293 checks, all passing, including the Recycle Bin listing and purge, the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan (an ignored folder stays out of re-listings; a re-listed parent does not hide unread changes in a sub-folder), the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
+Automated (`StorageScopeTests.exe`, 341 checks, all passing, including the Recycle Bin listing and purge, the ignore list, settings persistence, file categories, scan statistics, the free-space history, the saved-scan round trip and corrupt-file rejection, incremental tree updates checked against a fresh scan (an ignored folder stays out of re-listings; a re-listed parent does not hide unread changes in a sub-folder), the folder-time re-check and the change watcher; cancellation tests use a generated folder tree, so results do not depend on the machine): path canonicalisation, the refresh-folder subtree swap, every protection rule incl. `..`,
 case, trailing slashes, `%SystemRoot%`, 8.3 names, ADS, `\\?\`, long and Unicode paths, junction to `System32`;
 scanner totals on a tree with Unicode folders, a >300-char path and a junction (target not counted); inaccessible and
 missing roots; cancellation (1 ms before start, ~400 ms mid-scan) with worker threads gone afterwards; permanent delete
@@ -212,9 +215,8 @@ of a tree containing a junction (target survives, read-only files handled, locke
 `C:\Windows`, `System32`, `Program Files`, drive roots; real Recycle Bin delete; temp cleanup on a controlled folder
 (old files removed, recent and locked files kept, empty old folder removed, non-temp folders rejected).
 
-Manual, in the real app: start-up without scanning (18 MB); full scan of `C:` (1,088,267 files, 347,028 folders,
-250.3 GB in 57 s, 589 inaccessible folders skipped, peak working set 286 MB, UI round-trip latency ~0 ms during the scan);
-`D:` scan (636,657 files, 11 s); Stop (124 ms, memory back to 20 MB); Windows and Program Files selected => delete
+Manual, in the real app: start-up without scanning (18 MB); full scan of `C:` and `D:` together (1,661,470 files, 435,430 folders, 294.8 GB in 29 s warm / 62 s cold, 591 inaccessible folders skipped, working set about 370 MB for the whole tree);
+during a scan the Storage Analyzer and Treemap can already be browsed, with the percentage and time left shown in the header; Stop (124 ms, memory back to 20 MB); Windows and Program Files selected => delete
 buttons disabled with the explanation and "Open Installed Apps"; delete dialog default = Recycle Bin; Esc cancels;
 recycled folder verified in the Recycle Bin; permanent delete needs the second red dialog, Enter on its default does
 nothing; Manage opens Explorer at the folder; Large Files, search, Temporary Files scan and Settings pages render real

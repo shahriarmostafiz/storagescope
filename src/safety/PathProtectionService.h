@@ -44,6 +44,11 @@ public:
     bool CanScan(const std::wstring& path) const;
     bool NeedsWarning(const std::wstring& path) const;          // Caution level
 
+    // Windows itself, installed programs and boot/recovery areas: what file lists (Large Files, Old Files, Search) leave out.
+    // Narrower than "cannot be deleted": the Users folder and profile folders cannot be deleted either, but the user's own files in them
+    // are exactly what those lists are for.
+    bool IsSystemLocation(const std::wstring& path) const;
+
 private:
     ProtectionInfo ClassifyCanonical(const std::wstring& canonical) const;
     Config cfg_;

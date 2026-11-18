@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "scanner/ScanNode.h"
+#include "ui/SelKeep.h"
 #include "ui/View.h"
 
 namespace ss {
@@ -16,12 +17,19 @@ public:
     void Layout(int w, int h) override;
     LRESULT OnMessage(UINT m, WPARAM w, LPARAM l) override;
     void OnShow() override { Rebuild(); }
-    void Reload() override { Rebuild(); }
+    void Reload() override {
+        if (!IsWindowVisible(hwnd_)) return;  // OnShow() rebuilds: do not walk the whole tree for a page nobody is looking at
+        if (fp_ && Fingerprint() == fp_) return;  // the tree did not change (a basket or drive-space refresh): no need to walk it again
+        keep_.Remember(rows_, checked_, list_, true);  // an auto-update must not drop the user's selection
+        Rebuild();
+    }
     void OnBusyChanged() override { UpdateButtons(); }
     void DropReferences() override;
 
 private:
     void Rebuild();
+    uint64_t Fingerprint() const;  // cheap summary of what the list is built from: scan, its totals, the visibility settings
+    uint64_t fp_ = 0;
     void UpdateButtons();
     void Act(int id);
     void ToggleAll();
@@ -34,6 +42,7 @@ private:
          note_ = nullptr, bRefresh_ = nullptr, lblStale_ = nullptr, cbStale_ = nullptr, bBasket_ = nullptr, bSelAll_ = nullptr;
     void SyncSortUi();
     std::vector<ScanNode*> rows_;
+    SelKeep keep_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column
     uint64_t Mod(const ScanNode* n) const;
     std::unordered_map<const ScanNode*, uint64_t> newest_;  // Old Files: newest modified time inside each folder

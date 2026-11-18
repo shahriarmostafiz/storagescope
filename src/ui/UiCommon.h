@@ -13,6 +13,8 @@ COLORREF CategoryColor(FileCategory c);
 enum : UINT {
     WM_APP_SCAN_PROGRESS = WM_APP + 1,  // throttled batch update (~10/s), data read from shared state
     WM_APP_SCAN_COMPLETE,
+    WM_APP_SAVE_DONE,        // the saved scan was written on its worker thread
+    WM_APP_SCAN_LIVE,        // the scan created its tree: pages may start browsing it while it fills
     WM_APP_DELETE_DONE,
     WM_APP_TEMP_SCAN_DONE,
     WM_APP_TEMP_CLEAN_DONE,

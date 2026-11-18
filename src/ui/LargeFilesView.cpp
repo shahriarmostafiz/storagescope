@@ -154,7 +154,20 @@ uint64_t LargeFilesView::Mod(const ScanNode* n) const {  // folders: the newest 
     return n->modified;
 }
 
+uint64_t LargeFilesView::Fingerprint() const {
+    ScanResult* sc = mw_->scan();
+    if (!sc || !sc->root) return 1;
+    const ScanNode& r = *sc->root;
+    uint64_t h = reinterpret_cast<uintptr_t>(sc) * 0x9E3779B97F4A7C15ull;
+    for (uint64_t v : {mw_->treeRev(), r.size, r.allocated, static_cast<uint64_t>(r.files), static_cast<uint64_t>(r.dirs),
+                       static_cast<uint64_t>(mw_->settings().showHidden) | (static_cast<uint64_t>(mw_->settings().showAppData) << 1)})
+        h = (h ^ v) * 0x100000001B3ull + (h >> 29);
+    return h | 1;  // never 0 (0 = "not built yet")
+}
+
 void LargeFilesView::DropReferences() {
+    fp_ = 0;
+    keep_.Remember(rows_, checked_, list_, true);  // by path: the nodes are about to be rebuilt
     newest_.clear();
     rows_.clear();
     checked_.clear();
@@ -176,6 +189,8 @@ uint64_t LargeFilesView::Threshold() const {
 }
 
 void LargeFilesView::Rebuild() {
+    fp_ = Fingerprint();
+    if (!keep_.Pending()) keep_.Remember(rows_, checked_, list_, false);
     rows_.clear();
     ScanResult* sc = mw_->scan();
     int cat = static_cast<int>(SendMessageW(cbType_, CB_GETCURSEL, 0, 0));  // 0 = all, else FileCategory + 1
@@ -199,7 +214,7 @@ void LargeFilesView::Rebuild() {
         auto blocked = [&](const ScanNode& c) {
             if (c.type != NodeType::Directory || !(c.scanRoot || (c.parent && c.parent->scanRoot))) return false;
             std::wstring p = BuildPath(&c);
-            return !path::IsDriveRoot(p) && mw_->protection().Classify(p).level >= ProtectionLevel::NoDelete;
+            return !path::IsDriveRoot(p) && mw_->protection().IsSystemLocation(p);
         };
         auto visible = [&](const ScanNode& c) {
             return !(c.attrs & FILE_ATTRIBUTE_SYSTEM) && (mw_->settings().showHidden || !(c.attrs & FILE_ATTRIBUTE_HIDDEN)) &&
@@ -282,6 +297,7 @@ void LargeFilesView::Rebuild() {
         return sortAsc_ ? c < 0 : c > 0;
     });
     ListView_SetItemCountEx(list_, static_cast<int>(rows_.size()), 0);
+    keep_.Restore(rows_, checked_, list_);
     InvalidateRect(list_, nullptr, FALSE);
     bool none = rows_.empty();
     ShowWindow(list_, none ? SW_HIDE : SW_SHOW);

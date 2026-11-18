@@ -13,9 +13,9 @@ uint32_t ClusterSizeOf(const std::wstring& root) {
     return 4096;
 }
 
-uint64_t AllocatedSizeOf(uint32_t a, uint64_t size, uint32_t cluster, const std::wstring& dirPrefix, const wchar_t* name) {
+uint64_t AllocatedSizeOf(uint32_t a, uint64_t size, uint32_t cluster, const std::wstring& dirPrefix, const wchar_t* name, bool exact) {
     if (size == 0 || (a & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))) return 0;
-    if (a & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE)) {
+    if (exact && (a & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE))) {
         DWORD hi = 0;
         DWORD lo = GetCompressedFileSizeW((dirPrefix + name).c_str(), &hi);
         if (lo != INVALID_FILE_SIZE || GetLastError() == NO_ERROR) return (static_cast<uint64_t>(hi) << 32) | lo;

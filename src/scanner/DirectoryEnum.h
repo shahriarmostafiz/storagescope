@@ -22,7 +22,9 @@ enum class ListStatus { Ok, AccessDenied, Unavailable };
 uint32_t ClusterSizeOf(const std::wstring& anyPath);
 // Size on disk estimate: cloud placeholders/empty = 0, compressed/sparse = real value, otherwise rounded up to the cluster size.
 // `dirPrefix` is the extended directory path ending in '\\' (needed only for compressed/sparse files).
-uint64_t AllocatedSizeOf(uint32_t attrs, uint64_t size, uint32_t cluster, const std::wstring& dirPrefix, const wchar_t* name);
+// exact = false skips the per-file lookup for compressed/sparse files (it opens each file: one disk seek per file) and uses the
+// logical size rounded up to clusters instead (an overestimate for compressed files).
+uint64_t AllocatedSizeOf(uint32_t attrs, uint64_t size, uint32_t cluster, const std::wstring& dirPrefix, const wchar_t* name, bool exact = true);
 
 // One-level listing of a directory (canonical path). Thread-safe; touches nothing but the disk.
 ListStatus ListDirectory(const std::wstring& canonicalDir, uint32_t cluster, std::vector<DirEntry>& out);

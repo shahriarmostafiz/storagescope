@@ -150,6 +150,7 @@ void AnalyzerView::Layout(int w, int h) {
 }
 
 void AnalyzerView::DropReferences() {
+    keep_.Remember(rows_, checked_, list_, true);  // by path: the nodes are about to be rebuilt
     rows_.clear();
     searchRows_.clear();
     if (cur_ && !cur_->removed) keepPath_ = BuildPath(cur_);  // Rebuild() returns to this folder in the updated tree
@@ -194,8 +195,9 @@ void AnalyzerView::GoUp() {
 }
 
 void AnalyzerView::Rebuild() {
+    if (!keep_.Pending()) keep_.Remember(rows_, checked_, list_, false);
     rows_.clear();
-    ScanResult* sc = mw_->scan();
+    ScanResult* sc = mw_->viewScan();
     if (!sc) {
         cur_ = nullptr;
         searchMode_ = false;
@@ -209,11 +211,12 @@ void AnalyzerView::Rebuild() {
         for (ScanNode* n : searchRows_)
             if (!n->removed && Visible(n)) rows_.push_back(n);
     } else if (cur_ && cur_->dir) {
-        for (auto& c : cur_->dir->children)
-            if (!c.removed && Visible(&c)) rows_.push_back(&c);
+        for (const auto& c : KidsOf(*cur_))  // while a scan runs, a folder shows nothing until its listing is in
+            if (!c.removed && Visible(&c)) rows_.push_back(const_cast<ScanNode*>(&c));
     }
     Sort();
     ListView_SetItemCountEx(list_, static_cast<int>(rows_.size()), 0);
+    keep_.Restore(rows_, checked_, list_);
     InvalidateRect(list_, nullptr, FALSE);
 
     bool none = rows_.empty();
@@ -239,10 +242,10 @@ void AnalyzerView::Sort() {
                 return CompareStringOrdinal(ea.c_str(), static_cast<int>(ea.size()), eb.c_str(), static_cast<int>(eb.size()), TRUE) - CSTR_EQUAL;
             }
             case C_SIZE:
-            case C_PCT: return Cmp(a->size, b->size);
-            case C_DISK: return Cmp(a->allocated, b->allocated);
-            case C_FILES: return Cmp(a->files, b->files);
-            case C_DIRS: return Cmp(a->dirs, b->dirs);
+            case C_PCT: return Cmp(LiveSize(*a), LiveSize(*b));
+            case C_DISK: return Cmp(LiveAllocated(*a), LiveAllocated(*b));
+            case C_FILES: return Cmp(LiveFiles(*a), LiveFiles(*b));
+            case C_DIRS: return Cmp(LiveDirs(*a), LiveDirs(*b));
             case C_MOD: return Cmp(a->modified, b->modified);
             default: return static_cast<int>(a->status) - static_cast<int>(b->status);
         }
@@ -280,7 +283,7 @@ void AnalyzerView::RunSearch() {
     std::wstring q = buf;
     while (!q.empty() && q.back() == L' ') q.pop_back();
     while (!q.empty() && q.front() == L' ') q.erase(q.begin());
-    if (q.empty() || !mw_->scan()) {
+    if (q.empty() || !mw_->viewScan()) {
         if (searchMode_) {
             searchMode_ = false;
             searchRows_.clear();
@@ -294,14 +297,15 @@ void AnalyzerView::RunSearch() {
     truncated_ = false;
     // Searches the existing index (no disk access). The directory path is carried down the walk, so a path query costs
     // one string join per entry instead of rebuilding the whole path from the parent chain.
-    ScanNode* top = mw_->scan()->root.get();
+    ScanNode* top = mw_->viewScan()->root.get();
     std::vector<std::pair<ScanNode*, std::wstring>> stack;
     stack.emplace_back(top, pathMode ? BuildPath(top) : std::wstring());
     while (!stack.empty() && !truncated_) {
         auto [n, dirPath] = std::move(stack.back());
         stack.pop_back();
         if (!n->dir) continue;
-        for (auto& c : n->dir->children) {
+        for (const auto& cc : KidsOf(*n)) {
+            ScanNode& c = const_cast<ScanNode&>(cc);
             if (c.removed) continue;
             if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // hidden with everything inside it
             std::wstring childPath;
@@ -340,18 +344,18 @@ std::wstring AnalyzerView::CellText(ScanNode* n, int col) const {
                     return e.substr(1) + L" File";
                 }
             }
-        case C_SIZE: return n->type == NodeType::Reparse ? L"" : FormatBytes(n->size);
-        case C_DISK: return n->type == NodeType::Reparse ? L"" : FormatBytes(n->allocated);
+        case C_SIZE: return n->type == NodeType::Reparse ? L"" : FormatBytes(LiveSize(*n));
+        case C_DISK: return n->type == NodeType::Reparse ? L"" : FormatBytes(LiveAllocated(*n));
         case C_PCT: {
-            uint64_t total = n->parent ? n->parent->size : n->size;
+            uint64_t total = LiveSize(n->parent ? *n->parent : *n);
             wchar_t b[32];
-            swprintf_s(b, L"%.1f%%", total ? 100.0 * static_cast<double>(n->size) / static_cast<double>(total) : 0.0);
+            swprintf_s(b, L"%.1f%%", total ? 100.0 * static_cast<double>(LiveSize(*n)) / static_cast<double>(total) : 0.0);
             return b;
         }
-        case C_FILES: return n->type == NodeType::Directory ? FormatCount(n->files) : L"";
-        case C_DIRS: return n->type == NodeType::Directory ? FormatCount(n->dirs) : L"";
+        case C_FILES: return n->type == NodeType::Directory ? FormatCount(LiveFiles(*n)) : L"";
+        case C_DIRS: return n->type == NodeType::Directory ? FormatCount(LiveDirs(*n)) : L"";
         case C_MOD: return FormatFileTime(n->modified);
-        case C_STATUS: return StatusText(n);
+        case C_STATUS: return IsBuilding(*n) && mw_->scanning() ? L"Scanning..." : StatusText(n);
     }
     return L"";
 }
@@ -380,8 +384,8 @@ void AnalyzerView::DrawPercent(NMLVCUSTOMDRAW* cd) {
     HBRUSH bg = CreateSolidBrush(sel ? Colors().accentSoft : Colors().panel);
     FillRect(dc, &r, bg);
     DeleteObject(bg);
-    uint64_t total = n->parent ? n->parent->size : n->size;
-    double frac = total ? static_cast<double>(n->size) / static_cast<double>(total) : 0.0;
+    uint64_t total = LiveSize(n->parent ? *n->parent : *n);
+    double frac = total ? static_cast<double>(LiveSize(*n)) / static_cast<double>(total) : 0.0;
     RECT bar{r.left + 4, r.top + 4, r.right - 4, r.bottom - 4};
     RECT fill = bar;
     fill.right = bar.left + static_cast<LONG>((bar.right - bar.left) * frac);
@@ -452,7 +456,7 @@ void AnalyzerView::UpdateSelectionUi() {
     EnableWindow(bRecycle_, canDelete);
     EnableWindow(bPerm_, canDelete);
     EnableWindow(bBasket_, canDelete);
-    EnableWindow(bRefresh_, idle && mw_->scan() && cur_ && (cur_->type == NodeType::Directory || cur_->type == NodeType::Virtual));
+    EnableWindow(bRefresh_, idle && mw_->viewScan() && cur_ && (cur_->type == NodeType::Directory || cur_->type == NodeType::Virtual));
     ShowWindow(bApps_, noDelete ? SW_SHOW : SW_HIDE);
 }
 
@@ -525,7 +529,7 @@ void AnalyzerView::PaintBand() {
     }
     SetBkMode(dc, TRANSPARENT);
     crumbs_.clear();
-    ScanResult* sc = mw_->scan();
+    ScanResult* sc = mw_->viewScan();
     int x0 = mw_->S(12) + mw_->S(64) + mw_->S(8) + mw_->S(100) + mw_->S(12);
     int x1 = crumbRight_;
     int y0 = 0, y1 = band_.bottom;
