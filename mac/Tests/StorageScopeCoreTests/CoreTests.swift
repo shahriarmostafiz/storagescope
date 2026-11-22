@@ -190,4 +190,43 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Format.duration(3725), "1:02:05")
         XCTAssertEqual(Format.duration(-5), "0:00")
     }
+
+    func testDuplicateFinder() throws {
+        let fm = FileManager.default
+        let d = dir + "/dups"
+        try fm.createDirectory(atPath: d + "/a", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: d + "/b", withIntermediateDirectories: true)
+        let big = Data(repeating: 0x61, count: 300 * 1024)
+        var tail = big, mid = big
+        tail[tail.count - 1] = 0x62      // differs only at the very end: the quick check tells it apart
+        mid[150 * 1024] = 0x62           // differs only in the middle: only the full comparison tells it apart
+        func put(_ p: String, _ data: Data) { fm.createFile(atPath: d + "/" + p, contents: data) }
+        put("a/one.bin", big); put("b/two.bin", big); put("b/three.bin", big)
+        put("a/tail.bin", tail); put("a/mid.bin", mid)
+        put("a/small1.txt", Data(repeating: 0x63, count: 1000)); put("b/small2.txt", Data(repeating: 0x63, count: 1000))
+        put("a/empty1", Data()); put("b/empty2", Data())
+        put("a/unique.txt", Data("something else entirely".utf8))
+        func age(_ p: String, _ days: Double) throws {
+            try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -days * 86_400)], ofItemAtPath: d + "/" + p)
+        }
+        try age("a/one.bin", 30); try age("b/three.bin", 20); try age("b/two.bin", 10)  // the oldest is the one to keep
+        try age("a/small1.txt", 5); try age("b/small2.txt", 1)
+
+        let root = scan()
+        let files = DuplicateFinder.candidates(root: root.find(path: d)!, minSize: 1)
+        XCTAssertEqual(files.count, 8)  // the two empty files are not candidates
+        for threads in [1, 4] {
+            let progress = DuplicateFinder.Progress()
+            let groups = DuplicateFinder.find(files, threads: threads, progress: progress)
+            XCTAssertEqual(groups.count, 2)
+            if groups.count == 2 {
+                XCTAssertEqual(groups[0].map { $0.name }, ["one.bin", "three.bin", "two.bin"])  // most reclaimable space first, oldest first
+                XCTAssertEqual(groups[1].map { $0.name }, ["small1.txt", "small2.txt"])
+            }
+            XCTAssertEqual(progress.snapshot.stage, 2)
+        }
+        let stopped = DuplicateFinder.Cancel()
+        stopped.cancel()
+        XCTAssertTrue(DuplicateFinder.find(files, cancel: stopped).isEmpty)
+    }
 }

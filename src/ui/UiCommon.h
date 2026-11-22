@@ -23,6 +23,7 @@ enum : UINT {
     WM_APP_SYNC_DONE,        // folders were re-listed on a worker thread; apply them to the tree
     WM_APP_INFO_THEME,       // sent to every SSInfo icon when the theme changes (tooltip colours)
     WM_APP_BIN_DONE,         // a Recycle Bin restore / delete / empty finished on its worker thread
+    WM_APP_DUP_DONE,         // the duplicate search finished on its worker thread (lParam = job id)
 };
 
 // All colours come from here so a dark theme can be added later by swapping this table.

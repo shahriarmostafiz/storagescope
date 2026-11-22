@@ -12,7 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 set(SS_COMPILE_DEFS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
-set(SS_SYS_LIBS user32 gdi32 comctl32 shell32 ole32 uuid advapi32 shlwapi uxtheme dwmapi msimg32 oleacc oleaut32 uiautomationcore cabinet gdiplus)
+set(SS_SYS_LIBS user32 gdi32 comctl32 shell32 ole32 uuid advapi32 shlwapi uxtheme dwmapi msimg32 oleacc oleaut32 uiautomationcore cabinet bcrypt gdiplus)
 
 # Everything that has no UI: scanner, safety rules, file operations, temp cleanup, utils.
 add_library(storagescope_core STATIC
@@ -28,6 +28,7 @@ add_library(storagescope_core STATIC
   src/scanner/ScanSnapshot.cpp
   src/scanner/DirectoryEnum.cpp
   src/scanner/TreeSync.cpp
+  src/scanner/DuplicateFinder.cpp
   src/app/History.cpp
   src/operations/FileOperationService.cpp
   src/operations/ExplorerService.cpp
@@ -50,6 +51,7 @@ add_executable(StorageScope WIN32
   src/ui/DashboardView.cpp
   src/ui/AnalyzerView.cpp
   src/ui/LargeFilesView.cpp
+  src/ui/DuplicatesView.cpp
   src/ui/TempFilesView.cpp
   src/ui/SettingsView.cpp
   src/ui/TreemapView.cpp

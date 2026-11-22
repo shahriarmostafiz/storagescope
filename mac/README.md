@@ -14,6 +14,7 @@ A native macOS (SwiftUI) version of StorageScope: see what uses your disk, find 
 | Treemap | Click a folder to go into it, path bar to go up, hover for details |
 | Large Files | Files above a size, by type |
 | Old Files | Files and whole folders not modified for 1 / 3 / 6 / 12 / 24 months (default 3); a folder whose files are all old is one row |
+| Duplicate Files | Files with exactly the same content (same size, then a hash of the start and end, then of the whole file), grouped. The oldest of each group is the **original** and is kept; every copy is selected and says which file it is a copy of (**Duplicate of** column). **Keep This One** picks another original. An original can never be selected, so one copy always stays. System software and the insides of `.git`, `.svn` and `.hg` folders are never listed |
 | Cache & Logs | `~/Library/Caches`, logs, browser caches (Chrome, Edge, Brave, Arc, Vivaldi, Opera, Safari, Firefox, per profile), Xcode DerivedData, npm cache |
 
 Every list has **Select all** and multi-select, **Show in Finder** and **Move to Trash**.
@@ -81,11 +82,11 @@ build-app.sh                builds build/StorageScope.app
 
 - **Scanner**: `readdir` + `lstat` directly, top levels in parallel. Sizes are allocated bytes. Symbolic links are not followed or counted. For a whole-disk scan, `/Volumes`, `/System/Volumes` (a duplicate view of the same files), `/dev` and swap are skipped.
 - **Search**: a flat copy of the scan in tree order with every name lowercased in one byte buffer. A folder's contents are one index range, so "search only in this folder" is a range scan and "skip this folder" is one jump. Matching uses `memmem`. A regex search stops after 3 seconds.
-- **Large/Old Files, Search, Treemap** read the scan in memory. They do not touch the disk.
+- **Large/Old Files, Search, Treemap** read the scan in memory. They do not touch the disk. **Duplicate Files** is the one page that reads file contents (SHA-256, only for files that already match in size and in their first and last 64 KB).
 
 ## Updates (matching the Windows version)
 
-- **Browse while scanning:** Storage Analyzer and Treemap show the tree as far as it has been scanned and follow it about once a second. Search, Large Files and Old Files wait until the scan has finished.
+- **Browse while scanning:** Storage Analyzer and Treemap show the tree as far as it has been scanned and follow it about once a second. Search, Large Files, Old Files and Duplicate Files wait until the scan has finished.
 - **Remembered scan:** the last scan is saved (compressed, in `~/Library/Application Support/StorageScope/lastscan.bin`) after a scan and after moving items to the Trash, and loaded at launch. Switch it off or clear it at the bottom of the sidebar.
 - **Stop** keeps the previous results; the half-scanned tree is dropped.
 

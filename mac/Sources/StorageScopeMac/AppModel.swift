@@ -9,6 +9,7 @@ enum Page: String, CaseIterable, Identifiable {
     case treemap = "Treemap"
     case large = "Large Files"
     case old = "Old Files"
+    case duplicates = "Duplicate Files"
     case cache = "Cache & Logs"
 
     var id: String { rawValue }
@@ -21,6 +22,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .treemap: return "square.grid.3x3.fill"
         case .large: return "arrow.up.doc"
         case .old: return "clock.arrow.circlepath"
+        case .duplicates: return "doc.on.doc"
         case .cache: return "sparkles"
         }
     }

@@ -28,6 +28,7 @@
 #include "safety/PathProtectionService.h"
 #include "scanner/DirectoryScanner.h"
 #include "utils/FormatUtils.h"
+#include "scanner/DuplicateFinder.h"
 #include "ui/SelKeep.h"
 #include "utils/ListState.h"
 
@@ -435,6 +436,65 @@ static ScanNode* AddNode(ScanNode* parent, const wchar_t* name, NodeType t, uint
     if (t == NodeType::Directory) c.dir = std::make_unique<DirData>();
     parent->dir->children.push_back(std::move(c));
     return &parent->dir->children.back();
+}
+
+static void MkContent(const std::wstring& p, const std::string& data) {
+    HANDLE h = CreateFileW(Ext(p).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD w;
+    WriteFile(h, data.data(), static_cast<DWORD>(data.size()), &w, nullptr);
+    CloseHandle(h);
+}
+
+static void TestDuplicates(const std::wstring& base) {
+    SECTION("duplicates");
+    std::wstring d = base + L"\\dups";
+    MkDirs(d + L"\\a");
+    MkDirs(d + L"\\b");
+    std::string big(300 * 1024, 'a'), tail = big, mid = big;
+    tail.back() = 'b';      // differs only at the very end: the quick check must tell it apart
+    mid[150 * 1024] = 'b';  // differs only in the middle: only the full comparison can tell it apart
+    MkContent(d + L"\\a\\one.bin", big);
+    MkContent(d + L"\\b\\two.bin", big);
+    MkContent(d + L"\\b\\three.bin", big);
+    MkContent(d + L"\\a\\tail.bin", tail);
+    MkContent(d + L"\\a\\mid.bin", mid);
+    MkContent(d + L"\\a\\small1.txt", std::string(1000, 'c'));
+    MkContent(d + L"\\b\\small2.txt", std::string(1000, 'c'));
+    MkContent(d + L"\\a\\empty1", "");
+    MkContent(d + L"\\b\\empty2", "");
+    MkContent(d + L"\\a\\unique.txt", "something else entirely");
+    std::vector<DupInput> in;
+    auto add = [&](const wchar_t* rel, uint64_t size, uint64_t mod) { in.push_back({d + rel, size, mod}); };
+    add(L"\\b\\two.bin", big.size(), 200);
+    add(L"\\b\\three.bin", big.size(), 150);
+    add(L"\\a\\one.bin", big.size(), 100);  // the oldest: the one to keep
+    add(L"\\a\\tail.bin", big.size(), 100);
+    add(L"\\a\\mid.bin", big.size(), 100);
+    add(L"\\a\\small1.txt", 1000, 300);
+    add(L"\\b\\small2.txt", 1000, 400);
+    add(L"\\a\\empty1", 0, 1);
+    add(L"\\b\\empty2", 0, 1);
+    add(L"\\a\\unique.txt", 23, 1);
+    add(L"\\a\\gone.bin", big.size(), 100);  // listed by the scan but deleted since: it just drops out
+    for (int threads : {1, 4}) {
+        DupProgress prog;
+        auto g = FindDuplicateGroups(in, threads, {}, &prog);
+        CHECK(g.size() == 2);
+        if (g.size() == 2) {
+            CHECK(g[0].size() == 3);  // the 300 KB copies come first (most reclaimable space)
+            CHECK(in[g[0][0]].path == d + L"\\a\\one.bin");  // oldest first
+            CHECK(in[g[0][1]].path == d + L"\\b\\three.bin");
+            CHECK(in[g[0][2]].path == d + L"\\b\\two.bin");
+            CHECK(g[1].size() == 2);
+            CHECK(in[g[1][0]].path == d + L"\\a\\small1.txt");
+        }
+        CHECK(prog.stage == 2 && prog.done == prog.total);
+    }
+    std::stop_source stopped;
+    stopped.request_stop();
+    CHECK(FindDuplicateGroups(in, 1, stopped.get_token()).empty());
+    CHECK(FindDuplicateGroups({}, 1, {}).empty());
 }
 
 static void TestLiveScan(const std::wstring& base) {
@@ -1264,6 +1324,7 @@ int main() {
     TestSearch();
     TestSelectionKeep();
     TestLiveScan(base);
+    TestDuplicates(base);
     TestUiHelpers();
     TestTempIgnore(base);
     TestStatsAndHistory(base);

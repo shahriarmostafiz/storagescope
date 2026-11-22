@@ -42,6 +42,7 @@ struct ContentView: View {
         case .treemap: NeedsScan { TreemapView() }
         case .large: NeedsScan(finished: true) { LargeFilesView() }
         case .old: NeedsScan(finished: true) { OldFilesView() }
+        case .duplicates: NeedsScan(finished: true) { DuplicatesView() }
         case .cache: CacheView()
         }
     }

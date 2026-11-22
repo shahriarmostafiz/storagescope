@@ -14,6 +14,7 @@
 #include "scanner/DirectoryScanner.h"
 #include "ui/AnalyzerView.h"
 #include "ui/DashboardView.h"
+#include "ui/DuplicatesView.h"
 #include "ui/LargeFilesView.h"
 #include "ui/SearchView.h"
 #include "ui/RecycleBinView.h"
@@ -30,8 +31,8 @@ namespace {
 
 constexpr int kStopId = 1;
 constexpr int kBasketDelId = 2, kBasketClearId = 3, kDetailsId = 4;
-const wchar_t* kNavItems[] = {L"Dashboard", L"Storage Analyzer", L"Search", L"Treemap", L"Large Files", L"Old Files", L"Temporary Files", L"Cache Files", L"Recycle Bin", L"Settings"};
-constexpr int kNavCount = 10;
+const wchar_t* kNavItems[] = {L"Dashboard", L"Storage Analyzer", L"Search", L"Treemap", L"Large Files", L"Old Files", L"Duplicate Files", L"Temporary Files", L"Cache Files", L"Recycle Bin", L"Settings"};
+constexpr int kNavCount = 11;
 
 int Td(HWND owner, const std::wstring& main, const std::wstring& content, PCWSTR icon, DWORD common,
        std::vector<TASKDIALOG_BUTTON> btns, int defBtn, std::vector<TASKDIALOG_BUTTON> radios = {}, int defRadio = 0,
@@ -257,6 +258,7 @@ bool MainWindow::OnCreate() {
     auto tm = std::make_unique<TreemapView>();
     auto lf = std::make_unique<LargeFilesView>();
     auto of = std::make_unique<LargeFilesView>(true);
+    auto df = std::make_unique<DuplicatesView>();
     auto tf = std::make_unique<TempFilesView>();
     auto cf = std::make_unique<TempFilesView>(true);
     auto rb = std::make_unique<RecycleBinView>();
@@ -273,10 +275,11 @@ bool MainWindow::OnCreate() {
     pages_[3] = std::move(tm);
     pages_[4] = std::move(lf);
     pages_[5] = std::move(of);
-    pages_[6] = std::move(tf);
-    pages_[7] = std::move(cf);
-    pages_[8] = std::move(rb);
-    pages_[9] = std::move(st);
+    pages_[6] = std::move(df);
+    pages_[7] = std::move(tf);
+    pages_[8] = std::move(cf);
+    pages_[9] = std::move(rb);
+    pages_[10] = std::move(st);
     for (auto& p : pages_) p->Create(hwnd_, this);
 
     SetStatus(L"No scan has been performed.");

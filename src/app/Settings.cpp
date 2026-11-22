@@ -146,7 +146,7 @@ void Settings::Load() {
             winW = w;
             winH = h;
             maximized = mx != 0;
-            lastPage = pg >= 0 && pg < 10 ? pg : 0;
+            lastPage = pg >= 0 && pg < 11 ? pg : 0;
         }
     }
     u("lastFullScanDay", lastFullScanDay, 0, 0xFFFFFFFFu);
