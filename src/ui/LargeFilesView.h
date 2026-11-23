@@ -41,6 +41,9 @@ private:
          list_ = nullptr, info_ = nullptr, empty_ = nullptr, bOpen_ = nullptr, bRecycle_ = nullptr, bPerm_ = nullptr,
          note_ = nullptr, bRefresh_ = nullptr, lblStale_ = nullptr, cbStale_ = nullptr, bBasket_ = nullptr, bSelAll_ = nullptr;
     void SyncSortUi();
+    void SyncDrives();  // fills the drive list from the scan's top-level nodes; the list is hidden unless there are two or more
+    HWND lblDrive_ = nullptr, cbDrive_ = nullptr;
+    std::vector<std::wstring> drives_;  // names (not nodes: they stay valid across rescans); combo index i+1 = drives_[i], 0 = all
     std::vector<ScanNode*> rows_;
     SelKeep keep_;
     std::unordered_set<const ScanNode*> checked_;  // rows ticked with the checkbox column

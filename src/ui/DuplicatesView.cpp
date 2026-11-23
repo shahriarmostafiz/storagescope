@@ -128,9 +128,16 @@ void DuplicatesView::OnShow() {
 }
 
 void DuplicatesView::Reload() {
+    // Looking every row up in the scan tree is slow (thousands of rows), so it is not done on every automatic update of the tree:
+    // only when the page is shown again, and once after a delete from this page. A row for a file that is gone is harmless
+    // meanwhile: the delete step re-checks every file.
     stale_ = true;
-    if (IsWindowVisible(hwnd_)) Prune();
-    else UpdateButtons();
+    if (pruneAfterDelete_ && !mw_->busy() && IsWindowVisible(hwnd_)) {
+        pruneAfterDelete_ = false;
+        Prune();
+    } else {
+        UpdateButtons();
+    }
 }
 
 void DuplicatesView::Prune() {  // forget files that no longer exist in the scan; a group with fewer than two files is no longer a group
@@ -258,6 +265,7 @@ void DuplicatesView::UpdateButtons() {
     std::wstring t = Plural(groups_.size(), L"group", L"groups") + L", " + Plural(copies, L"duplicate file", L"duplicate files") + L", " +
                      FormatBytes(reclaim) + L" can be freed";
     if (ticked) t += L"   -   " + FormatCount(ticked) + L" selected (" + FormatBytes(pick) + L")";
+    if (skipped_) t += L"   -   " + Plural(skipped_, L"file", L"files") + L" could not be checked";
     SetWindowTextW(info_, t.c_str());
 }
 
@@ -295,33 +303,28 @@ void DuplicatesView::StartFind() {
     job->id = ++jobSeq_;
     job->minSize = MinSize();
     int cat = static_cast<int>(SendMessageW(cbType_, CB_GETCURSEL, 0, 0));  // 0 = all, else FileCategory + 1
-    // Same visibility rules as Large Files: no system files, no hidden files unless asked for, no app data, no Windows / Program Files.
-    auto blocked = [&](const ScanNode& c) {
-        if (c.type != NodeType::Directory || !(c.scanRoot || (c.parent && c.parent->scanRoot))) return false;
-        std::wstring p = BuildPath(&c);
-        return !path::IsDriveRoot(p) && mw_->protection().IsSystemLocation(p);
-    };
-    std::vector<ScanNode*> stack;
-    if (!blocked(*sc->root)) stack.push_back(sc->root.get());
+    // Each folder is stacked with its path, so the path of a file is one append (BuildPath walks up the whole tree for every file).
+    std::vector<std::pair<ScanNode*, std::wstring>> stack;
+    if (!mw_->InSystemLocation(*sc->root)) stack.push_back({sc->root.get(), BuildPath(sc->root.get())});
     while (!stack.empty()) {
-        ScanNode* n = stack.back();
+        auto [n, dirPath] = std::move(stack.back());
         stack.pop_back();
         if (!n->dir) continue;
         for (auto& c : n->dir->children) {
-            if (c.removed || (c.attrs & FILE_ATTRIBUTE_SYSTEM)) continue;
-            if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
+            // the same rules as every other list, and no cloud placeholders (reading one downloads it)
+            if (c.removed || mw_->HiddenFromLists(c) || (c.attrs & (FILE_ATTRIBUTE_OFFLINE | 0x00040000 | 0x00400000))) continue;
             if (c.type == NodeType::Directory) {
-                if ((!mw_->settings().showAppData && IsAppDataRoot(&c)) || blocked(c)) continue;
                 if (_wcsicmp(c.name.c_str(), L".git") == 0 || _wcsicmp(c.name.c_str(), L".svn") == 0 || _wcsicmp(c.name.c_str(), L".hg") == 0)
                     continue;  // repository internals are full of look-alike objects, and removing one can corrupt the repository
-                stack.push_back(&c);
+                stack.push_back({&c, path::Join(dirPath, c.name)});
             } else if (c.type == NodeType::File && c.size >= job->minSize && (cat == 0 || static_cast<int>(Categorize(c.name)) == cat - 1)) {
-                job->in.push_back({BuildPath(&c), c.size, c.modified});
+                job->in.push_back({path::Join(dirPath, c.name), c.size, c.modified});
             }
         }
     }
     groups_.clear();
     checked_.clear();
+    skipped_ = 0;
     if (job->in.size() < 2) {
         emptyText_ = L"There are not enough files of this kind and size in the scan to have duplicates.";
         return Fill();
@@ -339,7 +342,7 @@ void DuplicatesView::StartFind() {
             }
         }
         int threads = hdd ? 1 : static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 4u));
-        job->out = FindDuplicateGroups(job->in, threads, st, &job->prog);
+        job->out = FindDuplicateGroups(job->in, threads, st, &job->prog, &job->stamps);
         if (!st.stop_requested()) PostMessageW(hwnd_, WM_APP_DUP_DONE, 0, static_cast<LPARAM>(job->id));
     });
 }
@@ -362,12 +365,15 @@ void DuplicatesView::OnFound() {
     checked_.clear();
     for (auto& g : job->out) {
         Group grp;
-        for (uint32_t i : g) grp.items.push_back({job->in[i].path, job->in[i].size, job->in[i].modified});
+        for (uint32_t i : g) grp.items.push_back({job->in[i].path, job->in[i].size, job->in[i].modified, job->stamps[i].writeTime});
         for (size_t i = 1; i < grp.items.size(); ++i) checked_.insert(grp.items[i].path);  // every copy is ticked, the original is not
         groups_.push_back(std::move(grp));
     }
     rev_ = mw_->treeRev();
-    emptyText_ = L"No duplicates found among " + Plural(job->in.size(), L"file", L"files") + L" of " + FormatBytes(job->minSize) + L" or more.";
+    skipped_ = job->prog.skipped;
+    emptyText_ = L"No duplicates found among " + Plural(job->in.size() - std::min<uint64_t>(skipped_, job->in.size()), L"file", L"files") + L" of " +
+                 FormatBytes(job->minSize) + L" or more.";
+    if (skipped_) emptyText_ += L"\n" + Plural(skipped_, L"file", L"files") + L" could not be checked (in use, a link, a cloud file that is not downloaded, or changed meanwhile).";
     Fill();
 }
 
@@ -385,12 +391,21 @@ void DuplicatesView::Act(int id) {
     ScanResult* sc = mw_->scan();
     if (sel.empty() || !sc || !sc->root) return;
     std::unordered_set<std::wstring> want(sel.begin(), sel.end());
-    for (const Row& r : rows_) {  // each group must still have its original on disk, or deleting the copies could remove every file
+    // Right before deleting: every copy and its original must still be the file the search read (same size and write time). A file that
+    // was edited or replaced since is no longer a duplicate, and a missing original would leave no file at all.
+    auto unchanged = [](const Item& it) {
+        WIN32_FILE_ATTRIBUTE_DATA fa{};
+        if (!GetFileAttributesExW(path::ToExtended(it.path).c_str(), GetFileExInfoStandard, &fa)) return false;
+        uint64_t t = (static_cast<uint64_t>(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
+        return t == it.writeTime && ((static_cast<uint64_t>(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow) == it.size;
+    };
+    for (const Row& r : rows_) {
         if (IsOriginal(r) || !want.count(groups_[r.g].items[r.i].path)) continue;
         const Item& keep = groups_[r.g].items[0];
-        WIN32_FILE_ATTRIBUTE_DATA fa{};
-        if (!GetFileAttributesExW(path::ToExtended(keep.path).c_str(), GetFileExInfoStandard, &fa)) {
-            mw_->ShowMessage(L"An original file is missing.", L"\"" + keep.path + L"\" is no longer on the disk, so its copies are not removed. Press Find Duplicates again.", true);
+        const Item& copy = groups_[r.g].items[r.i];
+        if (!unchanged(keep) || !unchanged(copy)) {
+            mw_->ShowMessage(L"A file changed since the search.", L"\"" + (unchanged(keep) ? copy.path : keep.path) +
+                                 L"\" was edited, moved or deleted after it was compared, so nothing was removed. Press Find Duplicates again.", true);
             return;
         }
     }
@@ -398,6 +413,7 @@ void DuplicatesView::Act(int id) {
     for (const auto& p : sel)
         if (ScanNode* n = FindNodeByPath(sc->root.get(), p); n && !n->removed && n->type == NodeType::File) nodes.push_back(n);
     if (nodes.empty()) return Prune();
+    pruneAfterDelete_ = true;
     mw_->DeleteItems(std::move(nodes), id == ID_PERM ? DeleteMode::Permanent : DeleteMode::Recycle);
 }
 

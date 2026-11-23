@@ -71,9 +71,8 @@ final class AppModel: ObservableObject {
     private var expectedBytes: UInt64 = 0
     private var scanScale = 0.9         // how much of a volume's used space a scan really finds as files (learned, saved)
     private var scanStart = Date()
-    private var etaLastTime = 0.0
-    private var etaLastBytes: UInt64 = 0
-    private var etaRate = 0.0
+    private var eta = EtaEstimator()
+    private var expectedFiles = 0  // files the previous scan found in this folder (0 = no earlier scan to learn from)
     private var lastLiveBump = Date.distantPast
     private var savePending = false
 
@@ -164,9 +163,9 @@ final class AppModel: ObservableObject {
         unreadable = 0
         expectedBytes = UInt64(Double(usedBytes(for: path)) * scanScale)
         scanStart = Date()
-        etaLastTime = 0
-        etaLastBytes = 0
-        etaRate = 0
+        expectedFiles = 0
+        if let old = previousRoot, !old.isBuilding, let n = old.find(path: path), n.isDir, n.files >= 1000 { expectedFiles = n.files }
+        eta = EtaEstimator(cautious: expectedFiles == 0)  // a first scan only has the used space to go on: be careful
         let prog = ScanProgress()
         let flag = CancelFlag()
         liveProgress = prog
@@ -202,23 +201,21 @@ final class AppModel: ObservableObject {
     private func updateProgress() {
         let s = liveProgress.snapshot
         let elapsed = Date().timeIntervalSince(scanStart)
-        if expectedBytes > 0 {  // whole disk: the used space is known, so there is a percentage and a time estimate
-            let frac = min(0.99, Double(s.bytes) / Double(expectedBytes))
-            percent = Int(frac * 100)
-            if elapsed >= etaLastTime + 1 {  // speed over the last stretch, smoothed (it changes a lot between big and small files)
-                let inst = Double(s.bytes - min(s.bytes, etaLastBytes)) / (elapsed - etaLastTime)
-                etaRate = etaRate <= 0 ? inst : etaRate * 0.8 + inst * 0.2
-                etaLastTime = elapsed
-                etaLastBytes = s.bytes
-            }
-            let avg = elapsed > 0 ? Double(s.bytes) / elapsed : 0
-            let rate = (avg + etaRate) / 2
-            if frac >= 0.97 {
+        let byFiles = expectedFiles > 0
+        if byFiles || expectedBytes > 0 {
+            // Time depends on how many files there are, not on how big they are: a disk of many small files takes far longer than the same
+            // amount of data in big files. So the file count of the previous scan is used when there is one; the used space is only the
+            // rough guide of a first scan. If the folder grew past the old count the yardstick grows with it.
+            let done = byFiles ? Double(s.files) : Double(s.bytes)
+            let total = byFiles ? max(Double(expectedFiles), Double(s.files) * 1.1) : Double(expectedBytes)
+            let e = eta.update(elapsed: elapsed, done: done, total: total)
+            percent = Int(e.frac * 100)
+            if e.frac >= 0.97 {
                 timeLeft = "Almost done"
-            } else if elapsed < 6 || rate <= 0 || frac < 0.01 {
+            } else if !e.ready {
                 timeLeft = "Time left: estimating..."
             } else {
-                timeLeft = "Time left: about " + Format.duration(Double(expectedBytes - min(expectedBytes, s.bytes)) / rate)
+                timeLeft = "Time left: about " + Format.duration(e.seconds) + (byFiles ? "" : " (rough: first scan)")
             }
         } else {
             percent = nil

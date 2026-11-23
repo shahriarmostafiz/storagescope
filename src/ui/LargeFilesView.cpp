@@ -17,7 +17,7 @@
 namespace ss {
 namespace {
 
-enum { ID_SIZE = 1, ID_CUSTOM, ID_TYPE, ID_LIST, ID_INFO, ID_EMPTY, ID_OPEN, ID_RECYCLE, ID_PERM, ID_NOTE, ID_SORT, ID_DIR, ID_REFRESH, ID_STALE, ID_BASKET, ID_SELALL };
+enum { ID_SIZE = 1, ID_CUSTOM, ID_TYPE, ID_LIST, ID_INFO, ID_EMPTY, ID_OPEN, ID_RECYCLE, ID_PERM, ID_NOTE, ID_SORT, ID_DIR, ID_REFRESH, ID_STALE, ID_BASKET, ID_SELALL, ID_DRIVE };
 enum Col { C_NAME, C_SIZE, C_TYPE, C_LOC, C_MOD, C_COUNT };
 
 std::wstring LowerExt(const ScanNode* n) {
@@ -49,6 +49,12 @@ void LargeFilesView::OnCreate() {
     for (int i = 0; i < kCategoryCount; ++i)
         SendMessageW(cbType_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(CategoryName(static_cast<FileCategory>(i))));
     SendMessageW(cbType_, CB_SETCURSEL, 0, 0);
+    lblDrive_ = Make(L"STATIC", L"Drive:", SS_LEFT | SS_CENTERIMAGE, 0);
+    cbDrive_ = Make(L"SSCombo", L"Drive", WS_TABSTOP, ID_DRIVE);
+    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
+    SendMessageW(cbDrive_, CB_SETCURSEL, 0, 0);
+    ShowWindow(lblDrive_, SW_HIDE);
+    ShowWindow(cbDrive_, SW_HIDE);
     lblStale_ = Make(L"STATIC", old_ ? L"Not modified in:" : L"Last modified:",SS_LEFT | SS_CENTERIMAGE, 0);
     cbStale_ = Make(L"SSCombo", L"Last modified", WS_TABSTOP, ID_STALE);  // old and big = the safest cleanup candidates
     for (const wchar_t* s : old_ ? std::initializer_list<const wchar_t*>{L"Older than 1 month", L"Older than 3 months", L"Older than 6 months", L"Older than 1 year", L"Older than 2 years"}
@@ -110,6 +116,10 @@ void LargeFilesView::Layout(int w, int h) {
         }
         x += mw_->S(14);
     };
+    bool drives = drives_.size() > 1;
+    ShowWindow(lblDrive_, drives ? SW_SHOW : SW_HIDE);
+    ShowWindow(cbDrive_, drives ? SW_SHOW : SW_HIDE);
+    if (drives) group({{lblDrive_, 56}, {cbDrive_, 130}});
     group({{lblSize_, 96}, {cbSize_, 110}});
     if (custom) group({{edCustom_, 70}, {lblMb_, 30}});
     group({{lblType_, 44}, {cbType_, 150}});
@@ -188,8 +198,31 @@ uint64_t LargeFilesView::Threshold() const {
     }
 }
 
+void LargeFilesView::SyncDrives() {
+    std::vector<std::wstring> now;
+    ScanResult* sc = mw_->scan();
+    if (sc && sc->root && BuildPath(sc->root.get()).empty() && sc->root->dir)  // the virtual "This PC" root: its children are the drives
+        for (auto& c : sc->root->dir->children)
+            if (!c.removed) now.push_back(DisplayName(&c));
+    if (now == drives_) return;
+    LRESULT cur = SendMessageW(cbDrive_, CB_GETCURSEL, 0, 0);
+    std::wstring keep = cur > 0 && static_cast<size_t>(cur) <= drives_.size() ? drives_[static_cast<size_t>(cur) - 1] : L"";
+    bool wasShown = drives_.size() > 1;
+    drives_ = now;
+    SendMessageW(cbDrive_, CB_RESETCONTENT, 0, 0);
+    SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"All drives"));
+    int sel = 0;
+    for (size_t i = 0; i < drives_.size(); ++i) {
+        SendMessageW(cbDrive_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(drives_[i].c_str()));
+        if (drives_[i] == keep) sel = static_cast<int>(i) + 1;
+    }
+    SendMessageW(cbDrive_, CB_SETCURSEL, sel, 0);
+    if (wasShown != (drives_.size() > 1) && lastW_) Layout(lastW_, lastH_);
+}
+
 void LargeFilesView::Rebuild() {
     fp_ = Fingerprint();
+    SyncDrives();
     if (!keep_.Pending()) keep_.Remember(rows_, checked_, list_, false);
     rows_.clear();
     ScanResult* sc = mw_->scan();
@@ -210,16 +243,7 @@ void LargeFilesView::Rebuild() {
     if (sc) {
         uint64_t minSize = Threshold();
         // Windows and installed programs (Program Files...) are never listed: nothing there can be deleted from this app anyway.
-        // Only the top level of a scan is classified (everything below inherits it), so this costs a few lookups, not one per folder.
-        auto blocked = [&](const ScanNode& c) {
-            if (c.type != NodeType::Directory || !(c.scanRoot || (c.parent && c.parent->scanRoot))) return false;
-            std::wstring p = BuildPath(&c);
-            return !path::IsDriveRoot(p) && mw_->protection().IsSystemLocation(p);
-        };
-        auto visible = [&](const ScanNode& c) {
-            return !(c.attrs & FILE_ATTRIBUTE_SYSTEM) && (mw_->settings().showHidden || !(c.attrs & FILE_ATTRIBUTE_HIDDEN)) &&
-                   !(c.type == NodeType::Directory && !mw_->settings().showAppData && IsAppDataRoot(&c)) && !blocked(c);
-        };
+        auto visible = [&](const ScanNode& c) { return !mw_->HiddenFromLists(c); };
         newest_.clear();
         if (old_) {  // newest modified time inside each folder, so a whole untouched folder can be listed as one row
             std::vector<ScanNode*> order{sc->root.get()}, st{sc->root.get()};  // a parent always precedes its children
@@ -249,18 +273,22 @@ void LargeFilesView::Rebuild() {
             }
         }
         std::vector<ScanNode*> stack;  // walks the existing scan index; no disk access
-        if (!blocked(*sc->root)) stack.push_back(sc->root.get());
+        ScanNode* start = sc->root.get();
+        LRESULT di = SendMessageW(cbDrive_, CB_GETCURSEL, 0, 0);
+        if (di > 0 && static_cast<size_t>(di) <= drives_.size() && start->dir) {  // one drive chosen: walk only that drive
+            start = nullptr;
+            for (auto& c : sc->root->dir->children)
+                if (!c.removed && DisplayName(&c) == drives_[static_cast<size_t>(di) - 1]) start = &c;
+        }
+        if (start && !mw_->InSystemLocation(*start)) stack.push_back(start);
         while (!stack.empty()) {
             ScanNode* n = stack.back();
             stack.pop_back();
             if (!n->dir) continue;
             for (auto& c : n->dir->children) {
                 if (c.removed) continue;
-                if (c.attrs & FILE_ATTRIBUTE_SYSTEM) continue;  // system files are never shown
-                if (!mw_->settings().showHidden && (c.attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
+                if (!visible(c)) continue;  // system and hidden files, app data, Windows / Program Files
                 if (c.type == NodeType::Directory) {
-                    if (!mw_->settings().showAppData && IsAppDataRoot(&c)) continue;  // AppData / ProgramData: advanced
-                    if (blocked(c)) continue;
                     if (old_ && cat == 0 && c.files > 0 && c.size >= minSize && Mod(&c) <= staleCutoff) {  // untouched as a whole: one row
                         rows_.push_back(&c);
                         total += c.size;
@@ -476,7 +504,7 @@ LRESULT LargeFilesView::OnMessage(UINT m, WPARAM w, LPARAM l) {
                 EnableWindow(edCustom_, SendMessageW(cbSize_, CB_GETCURSEL, 0, 0) == 4);
                 Layout(lastW_, lastH_);  // shows or hides the custom-size box
                 Rebuild();
-            } else if ((id == ID_TYPE || id == ID_STALE) && code == CBN_SELCHANGE) {
+            } else if ((id == ID_TYPE || id == ID_STALE || id == ID_DRIVE) && code == CBN_SELCHANGE) {
                 Rebuild();
             } else if (id == ID_CUSTOM && code == EN_KILLFOCUS) {
                 Rebuild();

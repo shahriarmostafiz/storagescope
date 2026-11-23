@@ -14,7 +14,7 @@ A native macOS (SwiftUI) version of StorageScope: see what uses your disk, find 
 | Treemap | Click a folder to go into it, path bar to go up, hover for details |
 | Large Files | Files above a size, by type |
 | Old Files | Files and whole folders not modified for 1 / 3 / 6 / 12 / 24 months (default 3); a folder whose files are all old is one row |
-| Duplicate Files | Files with exactly the same content (same size, then a hash of the start and end, then of the whole file), grouped. The oldest of each group is the **original** and is kept; every copy is selected and says which file it is a copy of (**Duplicate of** column). **Keep This One** picks another original. An original can never be selected, so one copy always stays. System software and the insides of `.git`, `.svn` and `.hg` folders are never listed |
+| Duplicate Files | Files with exactly the same content (same size, then a hash of the start and end, then of the whole file), grouped. The oldest of each group is the **original** and is kept; every copy is selected and says which file it is a copy of (**Duplicate of** column). **Keep This One** picks another original. An original can never be selected, so one copy always stays. Right before the Trash, every copy and its original is checked again (same size and modification time as when compared); nothing is moved if one changed. Links, iCloud files that are not downloaded, files in use and files that change while read are skipped, and the result line says how many. Two names of one file (a hard link) count as one file. System software and the insides of `.git`, `.svn` and `.hg` folders are never listed |
 | Cache & Logs | `~/Library/Caches`, logs, browser caches (Chrome, Edge, Brave, Arc, Vivaldi, Opera, Safari, Firefox, per profile), Xcode DerivedData, npm cache |
 
 Every list has **Select all** and multi-select, **Show in Finder** and **Move to Trash**.
@@ -93,7 +93,7 @@ build-app.sh                builds build/StorageScope.app
 ## Known limits (first version)
 
 - A saved scan is not re-checked at launch and there is no change watcher: use Scan to refresh it. (The Windows version also watches for changes.)
-- The percentage and time left are estimates from the volume's used space; they get better after the first whole-disk scan (the app learns how much of the used space is real files).
+- The percentage and time left count files: when the same folder was scanned before, against that scan's file count (accurate); on a first scan only the volume's used space is known, so the estimate is rough and says so. The countdown never falls faster than the clock and moves toward a new estimate over about 10 seconds.
 - No special handling for external hard drives yet (the Windows version reads a spinning disk with one thread).
 - Not compared against Finder's sizes: hard links are counted once per link, APFS clones and purgeable space are not special-cased.
 - Treemap shows the 300 biggest items of a folder; the tree view shows the 1,000 biggest.

@@ -412,14 +412,7 @@ void SearchView::Run() {
         }
         sp.showHidden = st.showHidden;
         bool showApp = st.showAppData;
-        sp.hideDir = [this, showApp](const ScanNode& c) {
-            if (!showApp && IsAppDataRoot(&c)) return true;
-            if (c.scanRoot || (c.parent && c.parent->scanRoot)) {  // Windows / Program Files: only the top level needs asking
-                std::wstring p = BuildPath(&c);
-                return !path::IsDriveRoot(p) && mw_->protection().IsSystemLocation(p);
-            }
-            return false;
-        };
+        sp.hideDir = [this, showApp](const ScanNode& c) { return (!showApp && IsAppDataRoot(&c)) || mw_->InSystemLocation(c); };
         ULONGLONG t0 = GetTickCount64();
         sp.cancel = [t0] { return GetTickCount64() - t0 > kBudgetMs; };
 

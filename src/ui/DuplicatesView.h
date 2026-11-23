@@ -26,6 +26,7 @@ private:
     struct Item {
         std::wstring path;
         uint64_t size = 0, modified = 0;
+        uint64_t writeTime = 0;  // as the search read it: a different time on disk later means the file changed
     };
     struct Group {
         std::vector<Item> items;  // items[0] is the original (kept); the rest are the copies
@@ -37,6 +38,7 @@ private:
         uint64_t id = 0;
         std::vector<DupInput> in;
         std::vector<std::vector<uint32_t>> out;
+        std::vector<DupStamp> stamps;
         DupProgress prog;
         uint64_t minSize = 0;
     };
@@ -62,8 +64,8 @@ private:
     std::vector<Row> rows_;
     std::unordered_set<std::wstring> checked_;  // ticked copies (by path)
     std::wstring emptyText_;
-    uint64_t rev_ = 0, jobSeq_ = 0;
-    bool stale_ = false, barShown_ = false;
+    uint64_t rev_ = 0, jobSeq_ = 0, skipped_ = 0;  // skipped_: files of the last search that could not be checked
+    bool stale_ = false, barShown_ = false, pruneAfterDelete_ = false;
     int lastW_ = 0, lastH_ = 0;
     std::shared_ptr<Job> job_;  // the running search (null when idle)
     std::jthread th_;           // declared last: stopped and joined first

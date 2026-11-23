@@ -16,6 +16,7 @@
 #include "scanner/IScanner.h"
 #include "scanner/ScanSnapshot.h"
 #include "scanner/TreeSync.h"
+#include "utils/EtaEstimator.h"
 
 namespace ss {
 
@@ -54,6 +55,11 @@ public:
     HFONT titleFont() const { return title_; }
     Settings& settings() { return settings_; }
     const PathProtectionService& protection() const { return prot_; }
+    // One rule for every list (Large Files, Old Files, Search, Duplicate Files). Windows and Program Files can only be the scan root or a
+    // folder directly under it, so only those need asking.
+    bool InSystemLocation(const ScanNode& n) const;
+    // Entries no list shows: system files, hidden files and app data (unless Settings turns them on), Windows and Program Files.
+    bool HiddenFromLists(const ScanNode& n) const;
     ScanResult* scan() const { return scan_.get(); }
     uint64_t treeRev() const { return treeRev_; }
     // What the Storage Analyzer and Treemap show: the tree that is being scanned right now (browsable while it fills), else the finished scan.
@@ -141,8 +147,8 @@ private:
     bool liveOn_ = false;
     ScanResult* liveNew_ = nullptr;  // hand-over slot (guarded by shared_)
     ULONGLONG lastLiveTick_ = 0;
-    uint64_t etaLastMs_ = 0, etaLastAlloc_ = 0;  // scan speed samples for the time-left estimate
-    double etaRate_ = 0;                         // smoothed bytes of disk space found per second
+    EtaEstimator eta_;                           // percent and time left of the running scan
+    uint64_t expItems_ = 0;                      // files + folders the previous scan found in these roots (0 = no earlier scan to learn from)
     void OnScanLive();
     bool showDetails_ = false;  // "More info" while scanning: show the folder being scanned
     UINT dpi_ = 96;

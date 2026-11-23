@@ -191,6 +191,42 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Format.duration(-5), "0:00")
     }
 
+    func testEtaEstimator() {
+        // A disk of 100,000 files scanned at 1,000 a second; after 30 s it slows to 100 a second (a stretch of tiny files).
+        var e = EtaEstimator(cautious: false)
+        var done = 0.0, t = 0.0, prev = 0.0, maxFall = 0.0, sawNotReady = false
+        var finished = false
+        while t <= 800 {
+            done += (t < 30 ? 1000 : 100) * 0.1
+            t += 0.1
+            let r = e.update(elapsed: t, done: done, total: 100_000)
+            if done >= 100_000 { finished = true; break }
+            if !r.ready { sawNotReady = sawNotReady || t < 6; continue }
+            if prev > 0 { maxFall = max(maxFall, prev - r.seconds - 0.1 - 1e-6) }  // it may fall by the 0.1 s that passed, no more
+            prev = r.seconds
+        }
+        XCTAssertTrue(sawNotReady)      // nothing is promised in the first seconds
+        XCTAssertLessThan(maxFall, 0.01)  // the countdown never falls faster than the clock
+        XCTAssertTrue(finished)
+        // steady speed: the estimate is close to the truth (80 s left after 20 s)
+        var s = EtaEstimator(cautious: false)
+        var r = EtaEstimator.Result()
+        var ts = 0.1
+        while ts <= 20 { r = s.update(elapsed: ts, done: ts * 1000, total: 100_000); ts += 0.1 }
+        XCTAssertTrue(r.ready && r.seconds > 70 && r.seconds < 90)
+        // a first scan (cautious) promises more time than the same feed with a known total: fast start, then a slow stretch
+        var c = EtaEstimator(cautious: true), n = EtaEstimator(cautious: false)
+        var rc = EtaEstimator.Result(), rn = EtaEstimator.Result()
+        var tc = 0.1
+        while tc <= 10 {
+            let d = tc < 5 ? tc * 10_000 : 50_000 + (tc - 5) * 1000
+            rc = c.update(elapsed: tc, done: d, total: 1_000_000)
+            rn = n.update(elapsed: tc, done: d, total: 1_000_000)
+            tc += 0.1
+        }
+        XCTAssertTrue(rc.ready && rn.ready && rc.seconds > rn.seconds)
+    }
+
     func testDuplicateFinder() throws {
         let fm = FileManager.default
         let d = dir + "/dups"
@@ -215,13 +251,26 @@ final class CoreTests: XCTestCase {
         let root = scan()
         let files = DuplicateFinder.candidates(root: root.find(path: d)!, minSize: 1)
         XCTAssertEqual(files.count, 8)  // the two empty files are not candidates
+        // a hard link is a second name of the same file, not a copy; a symbolic link is not a file to compare at all
+        try fm.createDirectory(atPath: d + "/links", withIntermediateDirectories: true)
+        put("links/orig.bin", big)
+        try fm.linkItem(atPath: d + "/links/orig.bin", toPath: d + "/links/hard.bin")
+        try fm.createSymbolicLink(atPath: d + "/links/sym.bin", withDestinationPath: d + "/links/orig.bin")
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -50 * 86_400)], ofItemAtPath: d + "/links/orig.bin")  // the oldest of all
+        let withLinks = DuplicateFinder.candidates(root: scan().find(path: d)!, minSize: 1)
+        let linked = DuplicateFinder.find(withLinks, threads: 2)
+        let names = linked.first?.map { $0.node.name } ?? []
+        XCTAssertEqual(names.count, 4)  // one name of the linked file, plus one.bin, two.bin and three.bin
+        XCTAssertEqual(Array(names.dropFirst()), ["one.bin", "three.bin", "two.bin"])
+        XCTAssertTrue(["orig.bin", "hard.bin"].contains(names.first ?? ""))  // either name of the oldest file, once
+        XCTAssertFalse(names.contains("sym.bin"))
         for threads in [1, 4] {
             let progress = DuplicateFinder.Progress()
             let groups = DuplicateFinder.find(files, threads: threads, progress: progress)
             XCTAssertEqual(groups.count, 2)
             if groups.count == 2 {
-                XCTAssertEqual(groups[0].map { $0.name }, ["one.bin", "three.bin", "two.bin"])  // most reclaimable space first, oldest first
-                XCTAssertEqual(groups[1].map { $0.name }, ["small1.txt", "small2.txt"])
+                XCTAssertEqual(groups[0].map { $0.node.name }, ["one.bin", "three.bin", "two.bin"])  // most reclaimable space first, oldest first
+                XCTAssertEqual(groups[1].map { $0.node.name }, ["small1.txt", "small2.txt"])
             }
             XCTAssertEqual(progress.snapshot.stage, 2)
         }

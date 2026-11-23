@@ -6,6 +6,7 @@ private struct DupItem: Identifiable, Hashable {
     let path: String
     let size: UInt64
     let modified: Double
+    let stamp: Int64  // modification time (ns) as the search read it: a different time on disk later means the file changed
     var id: String { path }
     var name: String { (path as NSString).lastPathComponent }
     var location: String { (path as NSString).deletingLastPathComponent }
@@ -31,6 +32,7 @@ struct DuplicatesView: View {
     @State private var progressText = ""
     @State private var emptyText = "Press Find Duplicates to look for files with identical content in your scan."
     @State private var cancel = DuplicateFinder.Cancel()
+    @State private var skipped = 0  // files of the last search that could not be checked
 
     private var originals: Set<String> { Set(groups.compactMap { $0.first?.path }) }
     private var copies: [DupItem] { groups.flatMap { $0.dropFirst() } }
@@ -53,7 +55,7 @@ struct DuplicatesView: View {
                     .disabled(!running && (model.root == nil || model.busy))
                 Spacer()
                 Image(systemName: "info.circle")
-                    .help("Two files are duplicates only when their contents are exactly the same; names and dates do not matter. In each group the oldest file is the original and is kept; pick another with Keep This One. Only files already in the scan are checked. System software and the insides of .git, .svn and .hg folders are never listed. A hard link looks like a copy, but removing it frees no space.")
+                    .help("Two files are duplicates only when their contents are exactly the same; names and dates do not matter. In each group the oldest file is the original and is kept; pick another with Keep This One. Only files already in the scan are checked. System software and the insides of .git, .svn and .hg folders are never listed. Two names of the same file (a hard link) count as one file.")
             }
             .padding(12)
 
@@ -121,6 +123,7 @@ struct DuplicatesView: View {
             if ok != selection { selection = ok }
         }
         .onChange(of: model.revision) { _ in prune() }
+        .onDisappear { if running { cancel.cancel() } }  // leaving the page stops a search that can no longer be stopped from here
     }
 
     private var summary: String {
@@ -128,6 +131,7 @@ struct DuplicatesView: View {
         let n = copies.count
         let freed = groups.reduce(UInt64(0)) { $0 + ($1.first?.size ?? 0) * UInt64($1.count - 1) }
         return "\(groups.count) group\(groups.count == 1 ? "" : "s"), \(n) duplicate file\(n == 1 ? "" : "s"), \(Format.bytes(freed)) can be freed"
+            + (skipped > 0 ? "   -   \(skipped) file\(skipped == 1 ? "" : "s") could not be checked" : "")
     }
 
     private func copiesIn(_ ids: Set<String>) -> [DupItem] { copies.filter { ids.contains($0.path) } }
@@ -146,6 +150,7 @@ struct DuplicatesView: View {
         groups = []
         rows = []
         selection = []
+        skipped = 0
         progressText = "Sorting files by size..."
         let flag = DuplicateFinder.Cancel()
         cancel = flag
@@ -165,7 +170,7 @@ struct DuplicatesView: View {
             let (found, checked): ([[DupItem]], Int) = await Task.detached(priority: .userInitiated) {
                 let files = DuplicateFinder.candidates(root: root, minSize: minSize, category: cat, skip: skip)
                 let g = DuplicateFinder.find(files, cancel: flag, progress: progress)
-                return (g.map { $0.map { DupItem(path: $0.path, size: $0.size, modified: $0.modified) } }, files.count)
+                return (g.map { $0.map { DupItem(path: $0.path, size: $0.size, modified: $0.node.modified, stamp: $0.stamp) } }, files.count)
             }.value
             poll.cancel()
             running = false
@@ -174,8 +179,11 @@ struct DuplicatesView: View {
                 return
             }
             groups = found
+            skipped = progress.snapshot.skipped
             selection = Set(found.flatMap { $0.dropFirst().map { $0.path } })  // every copy is selected, the original is not
-            emptyText = "No duplicates found among \(checked) file\(checked == 1 ? "" : "s") of \(Format.bytes(minSize)) or more."
+            let looked = max(0, checked - skipped)
+            emptyText = "No duplicates found among \(looked) file\(looked == 1 ? "" : "s") of \(Format.bytes(minSize)) or more."
+            if skipped > 0 { emptyText += "\n\(skipped) file\(skipped == 1 ? "" : "s") could not be checked (in use, a link, an iCloud file that is not downloaded, or changed meanwhile)." }
             rebuild()
         }
     }
@@ -203,10 +211,19 @@ struct DuplicatesView: View {
         let sel = copiesIn(ids)
         guard !sel.isEmpty else { return }
         let chosen = Set(sel.map { $0.path })
-        for g in groups where g.dropFirst().contains(where: { chosen.contains($0.path) }) {  // each group must still have its original on disk
-            if !FileManager.default.fileExists(atPath: g[0].path) {
-                model.alert("An original file is missing", "\"\(g[0].path)\" is no longer on the disk, so its copies are not removed. Press Find Duplicates again.")
-                return
+        // Right before trashing: every copy and its original must still be the file the search read (same size and modification time).
+        // A file edited or replaced since is no longer a duplicate, and a missing original would leave no file at all.
+        func unchanged(_ it: DupItem) -> Bool {
+            var st = stat()
+            return lstat(it.path, &st) == 0 && UInt64(st.st_size) == it.size
+                && Int64(st.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(st.st_mtimespec.tv_nsec) == it.stamp
+        }
+        for g in groups {
+            for copy in g.dropFirst() where chosen.contains(copy.path) {
+                if !unchanged(g[0]) || !unchanged(copy) {
+                    model.alert("A file changed since the search", "\"\(unchanged(g[0]) ? copy.path : g[0].path)\" was edited, moved or deleted after it was compared, so nothing was moved to the Trash. Press Find Duplicates again.")
+                    return
+                }
             }
         }
         let nodes = sel.compactMap { node($0.path) }

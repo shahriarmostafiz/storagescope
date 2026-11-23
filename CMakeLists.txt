@@ -51,6 +51,7 @@ add_executable(StorageScope WIN32
   src/ui/DashboardView.cpp
   src/ui/AnalyzerView.cpp
   src/ui/LargeFilesView.cpp
+  src/ui/SearchView.cpp
   src/ui/DuplicatesView.cpp
   src/ui/TempFilesView.cpp
   src/ui/SettingsView.cpp

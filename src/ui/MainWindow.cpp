@@ -622,8 +622,18 @@ void MainWindow::StartScan(std::vector<std::wstring> roots) {
     lastCanceled_ = false;
     live_ = nullptr;
     liveOn_ = false;
-    etaLastMs_ = etaLastAlloc_ = 0;
-    etaRate_ = 0;
+    expItems_ = 0;
+    if (!refreshTarget_ && scan_ && scan_->root && !scan_->canceled) {  // the last scan knows how many entries these roots hold: the best yardstick
+        uint64_t sum = 0;
+        bool all = true;
+        for (const auto& r : roots) {
+            ScanNode* n = FindNodeByPath(scan_->root.get(), r);
+            if (!n || n->type != NodeType::Directory) all = false;
+            else sum += static_cast<uint64_t>(n->files) + n->dirs;
+        }
+        if (all && sum >= 1000) expItems_ = sum;
+    }
+    eta_.Reset(expItems_ == 0);  // a first scan only has the used space to go on: be careful
     watcher_.Stop();  // a scan reads everything anyway; the watcher restarts when it finishes
     valThread_.request_stop();
     if (!refreshTarget_) lastRoots_ = roots;  // what the "Refresh" button on Large Files rescans
@@ -716,8 +726,16 @@ void MainWindow::OnScanProgress() {
     }
     if (!scanning_) return;
     std::wstring pct, left;
-    if (p.expected > 0) {  // whole drives: the used space is known, so there is a percentage and a time estimate
-        double frac = std::min(0.99, static_cast<double>(p.allocated) / static_cast<double>(p.expected));
+    const uint64_t items = p.files + p.dirs;
+    const bool byItems = expItems_ > 0;
+    if (byItems || p.expected > 0) {  // an earlier scan (entries) or the drive's used space (bytes) gives a percentage and a time estimate
+        // Time depends on how many files and folders there are, not on how big they are: a disk of many small files takes far longer
+        // than the same amount of data in big files. So the entry count of the previous scan is used when there is one; the used space
+        // is only the rough guide of a first scan. If the disk grew past the old count the yardstick grows with it.
+        const double done = byItems ? static_cast<double>(items) : static_cast<double>(p.allocated);
+        const double total = byItems ? std::max<double>(static_cast<double>(expItems_), items * 1.1) : static_cast<double>(p.expected);
+        const EtaResult e = eta_.Update(p.elapsedMs, done, total);
+        const double frac = e.frac;
         LONG st = GetWindowLongW(prog_, GWL_STYLE);
         if (st & PBS_MARQUEE) {
             SendMessageW(prog_, PBM_SETMARQUEE, FALSE, 0);
@@ -726,20 +744,12 @@ void MainWindow::OnScanProgress() {
         }
         SendMessageW(prog_, PBM_SETPOS, static_cast<WPARAM>(frac * 1000), 0);
         pct = L"Progress: " + std::to_wstring(static_cast<int>(frac * 100)) + L"%";
-        if (p.elapsedMs >= etaLastMs_ + 1000) {  // speed over the last stretch, smoothed (it changes a lot between big and small files)
-            double inst = static_cast<double>(p.allocated - std::min(p.allocated, etaLastAlloc_)) * 1000.0 / static_cast<double>(p.elapsedMs - etaLastMs_);
-            etaRate_ = etaRate_ <= 0 ? inst : etaRate_ * 0.8 + inst * 0.2;
-            etaLastMs_ = p.elapsedMs;
-            etaLastAlloc_ = p.allocated;
-        }
-        double avg = p.elapsedMs ? static_cast<double>(p.allocated) * 1000.0 / static_cast<double>(p.elapsedMs) : 0;
-        double rate = (avg + etaRate_) / 2;
         if (frac >= 0.97) left = L"Almost done";
-        else if (p.elapsedMs < 6000 || rate <= 0 || frac < 0.01) left = L"Time left: estimating...";
-        else left = L"Time left: about " + FormatDuration(static_cast<uint64_t>((p.expected - p.allocated) / rate * 1000.0));
+        else if (!e.ready) left = L"Time left: estimating...";
+        else left = L"Time left: about " + FormatDuration(static_cast<uint64_t>(e.seconds * 1000.0)) + (byItems ? L"" : L" (rough: first scan)");
     }
     // Normally just the percentage and the time left. "View more" adds the folder being scanned and the running totals.
-    std::wstring line = p.expected > 0 ? pct + L"     " + left : L"Files found: " + FormatCount(p.files) + L"     Elapsed: " + FormatDuration(p.elapsedMs);
+    std::wstring line = (byItems || p.expected > 0) ? pct + L"     " + left : L"Files found: " + FormatCount(p.files) + L"     Elapsed: " + FormatDuration(p.elapsedMs);
     if (showDetails_) {
         line += L"     |     Files: " + FormatCount(p.files) + L"     Folders: " + FormatCount(p.dirs) + L"     Size analyzed: " + FormatBytes(p.bytes) +
                 L"     Elapsed: " + FormatDuration(p.elapsedMs);
@@ -889,6 +899,18 @@ void MainWindow::Graft(ScanNode* t, std::unique_ptr<ScanResult> r) {
 }
 
 // ------------------------------------------------------------------ deleting
+
+bool MainWindow::InSystemLocation(const ScanNode& n) const {
+    if (n.type != NodeType::Directory || !(n.scanRoot || (n.parent && n.parent->scanRoot))) return false;
+    std::wstring p = BuildPath(&n);
+    return !path::IsDriveRoot(p) && prot_.IsSystemLocation(p);
+}
+
+bool MainWindow::HiddenFromLists(const ScanNode& n) const {
+    if (n.attrs & FILE_ATTRIBUTE_SYSTEM) return true;
+    if (!settings_.showHidden && (n.attrs & FILE_ATTRIBUTE_HIDDEN)) return true;
+    return n.type == NodeType::Directory && ((!settings_.showAppData && IsAppDataRoot(&n)) || InSystemLocation(n));
+}
 
 void MainWindow::DeleteItems(std::vector<ScanNode*> nodes, DeleteMode mode) {
     if (busy() || nodes.empty()) return;

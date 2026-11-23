@@ -29,6 +29,7 @@
 #include "scanner/DirectoryScanner.h"
 #include "utils/FormatUtils.h"
 #include "scanner/DuplicateFinder.h"
+#include "utils/EtaEstimator.h"
 #include "ui/SelKeep.h"
 #include "utils/ListState.h"
 
@@ -491,10 +492,85 @@ static void TestDuplicates(const std::wstring& base) {
         }
         CHECK(prog.stage == 2 && prog.done == prog.total);
     }
+    {   // hard links: two names of one file are not copies; a real copy next to them still is
+        std::wstring h = d + L"\\hl";
+        MkDirs(h);
+        MkContent(h + L"\\orig.bin", big);
+        bool linked = CreateHardLinkW(Ext(h + L"\\link.bin").c_str(), Ext(h + L"\\orig.bin").c_str(), nullptr) != 0;
+        MkContent(h + L"\\real.bin", big);
+        std::string other = big;
+        other[100] = 'z';
+        MkContent(h + L"\\solo.bin", other);
+        MkContent(h + L"\\solo_link_source.bin", other);
+        bool linked2 = CreateHardLinkW(Ext(h + L"\\solo_link.bin").c_str(), Ext(h + L"\\solo_link_source.bin").c_str(), nullptr) != 0;
+        if (linked && linked2) {
+            std::vector<DupInput> hin;
+            for (const wchar_t* n : {L"orig.bin", L"link.bin", L"real.bin", L"solo_link_source.bin", L"solo_link.bin"})
+                hin.push_back({h + L"\\" + n, big.size(), 100});
+            std::vector<DupStamp> stamps;
+            auto g = FindDuplicateGroups(hin, 2, {}, nullptr, &stamps);
+            CHECK(g.size() == 1);  // the pair that is only one file twice (solo) is no group at all
+            if (g.size() == 1) CHECK(g[0].size() == 2);  // orig/link count once, plus real.bin
+            CHECK(stamps.size() == hin.size() && stamps[0].writeTime != 0 && stamps[0].fileId == stamps[1].fileId);
+        }
+    }
+    {   // a file that is not the size the scan recorded is left out
+        std::vector<DupInput> bad = in;
+        for (auto& f : bad)
+            if (f.path.find(L"one.bin") != std::wstring::npos) f.size += 1;
+        auto g = FindDuplicateGroups(bad, 1, {});
+        CHECK(g.size() == 2 && g[0].size() == 2);  // one.bin dropped out of the 300 KB group (two copies left)
+    }
     std::stop_source stopped;
     stopped.request_stop();
     CHECK(FindDuplicateGroups(in, 1, stopped.get_token()).empty());
     CHECK(FindDuplicateGroups({}, 1, {}).empty());
+}
+
+static void TestEta() {
+    SECTION("eta");
+    // A disk of 100,000 entries scanned at 1,000 a second; after 30 s the scan hits a stretch of tiny files and slows to 100 a second.
+    EtaEstimator e;
+    e.Reset(false);
+    double done = 0, shown = 0, prevShown = 0, maxFall = 0, maxRise5 = 0, atSlow = 0;
+    bool sawNotReady = false;
+    for (uint64_t ms = 0; ms <= 800000 && done < 100000; ms += 100) {
+        done += (ms < 30000 ? 1000 : 100) * 0.1;
+        EtaResult r = e.Update(ms, done, 100000);
+        if (!r.ready) {
+            sawNotReady = sawNotReady || ms < 6000;
+            continue;
+        }
+        if (ms == 30000) atSlow = r.seconds;
+        if (prevShown > 0) maxFall = std::max(maxFall, prevShown - r.seconds - 0.1);  // it may fall by the 0.1 s that passed, no more
+        if (ms > 30000 && ms <= 35000) maxRise5 = std::max(maxRise5, r.seconds - atSlow);
+        prevShown = shown = r.seconds;
+    }
+    CHECK(sawNotReady);  // nothing is promised in the first seconds
+    CHECK(maxFall < 0.01);  // the countdown never falls faster than the clock
+    CHECK(maxRise5 < 400);  // after the slowdown the shown time grows over seconds, it does not jump straight to the new value
+    CHECK(done >= 100000);
+    // steady speed: the estimate is close to the truth
+    EtaEstimator s;
+    s.Reset(false);
+    EtaResult r{};
+    for (uint64_t ms = 0; ms <= 20000; ms += 100) r = s.Update(ms, ms * 1.0, 100000);  // 1,000 entries a second, 20 s in
+    CHECK(r.ready && r.seconds > 70 && r.seconds < 90);  // the truth is 80
+    // a first scan (cautious) promises more time than the same feed with a known total: fast start, then a slow stretch
+    EtaEstimator c, n;
+    c.Reset(true);
+    n.Reset(false);
+    EtaResult rc{}, rn{};
+    for (uint64_t ms = 0; ms <= 10000; ms += 100) {
+        double d = ms < 5000 ? ms * 10.0 : 50000 + (ms - 5000) * 1.0;
+        rc = c.Update(ms, d, 1000000);
+        rn = n.Update(ms, d, 1000000);
+    }
+    CHECK(rc.ready && rn.ready && rc.seconds > rn.seconds);
+    // Reset forgets everything
+    c.Reset(false);
+    r = c.Update(1000, 10, 1000);
+    CHECK(!r.ready);
 }
 
 static void TestLiveScan(const std::wstring& base) {
@@ -1323,6 +1399,7 @@ int main() {
     TestAppData();
     TestSearch();
     TestSelectionKeep();
+    TestEta();
     TestLiveScan(base);
     TestDuplicates(base);
     TestUiHelpers();
